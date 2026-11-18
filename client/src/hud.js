@@ -105,8 +105,9 @@ export class Hud {
       spectate: $('spectate'), net: $('netinfo'), board: $('scoreboard'),
       scorebar: $('scorebar'), mission: $('mission'), mName: $('m-name'), mObj: $('m-obj'), mVal: $('m-val'), mFill: $('m-fill'),
       mLives: $('m-lives'), mTime: $('m-time'), boss: $('bossbar'), bossName: $('boss-name'), bossFill: $('boss-fill'), bossHp: $('boss-hp'),
-      toasts: $('toasts'), buffs: $('buffs'),
+      toasts: $('toasts'), buffs: $('buffs'), dmglog: $('dmglog'),
     };
+    this.dlog = { rows: [], total: { out: 0, in: 0 }, dirty: true, shown: false };
     this.tags = new Map();
     this.announceLeft = 0;
     this.mm = $('minimap').getContext('2d');
@@ -401,6 +402,73 @@ export class Hud {
 
   setNetInfo(text) {
     this.el.net.textContent = text;
+  }
+
+  // ---- journal des dégâts (Alt) ----
+  // e = { dir: 'out' (infligés) | 'in' (reçus), name, team, d, kill, ally } ; des coups rapprochés sur le même char sont fusionnés.
+  logDamage(e) {
+    const log = this.dlog;
+    const now = performance.now();
+    const last = log.rows[log.rows.length - 1];
+    if (last && last.dir === e.dir && last.key === e.key && now - last.at < 1200) {
+      last.d += e.d;
+      last.n++;
+      last.kill ||= e.kill;
+      last.at = now;
+    } else {
+      log.rows.push({ ...e, n: 1, at: now });
+      if (log.rows.length > 40) log.rows.shift();
+    }
+    log.total[e.dir] += e.d;
+    log.dirty = true;
+  }
+
+  clearDamageLog() {
+    this.dlog.rows.length = 0;
+    this.dlog.total = { out: 0, in: 0 };
+    this.dlog.dirty = true;
+  }
+
+  setDamageLog(show) {
+    const log = this.dlog;
+    if (log.shown !== show) {
+      log.shown = show;
+      this.el.dmglog.classList.toggle('hidden', !show);
+      if (show) log.dirty = true;
+    }
+    if (!show || !log.dirty) return;
+    log.dirty = false;
+    const div = (cls, text) => {
+      const d = document.createElement('div');
+      d.className = cls;
+      if (text !== undefined) d.textContent = text;
+      return d;
+    };
+    const stat = (cls, label, value) => {
+      const d = div(cls, label);
+      const b = document.createElement('b');
+      b.textContent = value;
+      d.prepend(b);
+      return d;
+    };
+    const head = div('dl-head');
+    head.append(stat('out', ' infligés', log.total.out), stat('in', ' reçus', log.total.in));
+    const rows = div('dl-rows');
+    for (const r of log.rows.slice(-14)) {
+      const row = div(`dl-row ${r.dir}${r.kill ? ' kill' : ''}`);
+      const who = div('who', r.name);
+      if (r.team) who.className = `who c-${r.team}`;
+      const note = r.kill ? (r.dir === 'out' ? 'détruit' : 't’a détruit') : r.n > 1 ? `×${r.n}` : r.ally ? 'allié' : '';
+      if (note) {
+        const s = document.createElement('small');
+        s.textContent = note;
+        who.append(s);
+      }
+      row.append(div('ar', r.dir === 'out' ? '▸' : '◂'), who, div('pts', `${r.dir === 'out' ? '+' : '−'}${r.d}`));
+      rows.append(row);
+    }
+    const body = log.rows.length ? rows : div('dl-empty', 'Aucun impact pour le moment');
+    this.el.dmglog.replaceChildren(head, body);
   }
 
   setScoreboard(show, roster) {

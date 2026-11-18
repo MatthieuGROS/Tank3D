@@ -86,6 +86,19 @@ function updateDamageNumbers(dt) {
 }
 // Mes tirs, ou ceux du joueur que j'observe (spectateur / char détruit).
 const shotByWatched = (by) => by != null && by === (camId ?? game.myId);
+// Journal des dégâts (Alt) : coups infligés par le char observé et coups qu'il reçoit.
+function logDamage(ev) {
+  const w = camId ?? game.myId;
+  const dir = ev.by === w && ev.id !== w ? 'out' : ev.id === w ? 'in' : null;
+  if (!dir) return;
+  const other = dir === 'out' ? ev.id : ev.by; // l'autre char concerné (null : source inconnue)
+  const p = other != null ? game.roster.get(other) : null;
+  let name = 'Source inconnue';
+  if (other === w) name = 'Toi-même';
+  else if (p) name = p.unit ? unitDef(views.get(other)?.type ?? p.type).name : p.name;
+  const me = game.roster.get(w);
+  hud.logDamage({ dir, key: other, name, team: p?.team, d: ev.d, kill: ev.hp <= 0, ally: !!p && !!me && p.team === me.team && other !== w });
+}
 const DEBRIS = { crate: 0x8a6a42, tree: 0x5a7a3a, palm: 0x8a6a45, hedgehog: 0x45484c, column: 0xd6bf8e, wall: 0x9a9d9f, ruin: 0xd6bf8e };
 applyMap();
 
@@ -587,6 +600,7 @@ function onEvent(ev) {
       break;
     case 'hp':
       if (ev.heal) break;
+      if (ev.d > 0) logDamage(ev);
       if (shotByWatched(ev.by) && ev.d > 0) {
         const v = views.get(ev.id);
         if (v) damageNumber(v.x, v.gy + unitDef(v.type).height + 1.6, v.z, `-${ev.d}`, ev.hp <= 0 ? 'kill' : '');
@@ -673,6 +687,7 @@ function onEvent(ev) {
     case 'missionStart': {
       fx.clear();
       marks.length = 0;
+      hud.clearDamageLog();
       debriefAt = 0;
       newSkins = [];
       lastReward = null;
@@ -690,6 +705,7 @@ function onEvent(ev) {
     case 'roundStart':
       fx.clear();
       marks.length = 0;
+      hud.clearDamageLog();
       hud.announce(`Manche ${ev.n}`, 'Préparez-vous', 3);
       break;
     case 'roundEnd':
@@ -1229,6 +1245,7 @@ function updateHud(dt, mine, target) {
   }
 
   hud.setScoreboard(input.has('scores'), game.roster);
+  hud.setDamageLog(input.has('dmglog'));
   hud.setNetInfo(`ping ${Math.round(net.rtt)} ms · tampon ${Math.round(game.interpDelay)} ms`);
 }
 

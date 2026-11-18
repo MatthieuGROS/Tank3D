@@ -192,6 +192,25 @@ input:focus { box-shadow: inset 0 0 0 1px var(--amber), 0 0 0 3px rgba(245, 179,
 #scoreboard td.n, #scoreboard th.n { text-align: right; font-variant-numeric: tabular-nums; }
 #scoreboard td small { margin-left: 8px; font-size: 10px; letter-spacing: 0.14em; color: var(--dim); }
 
+/* journal des dégâts (Alt maintenu) : colonne sur le côté gauche, entre le score et l'état du char */
+#dmglog { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 270px; padding: 10px 12px 8px; background: rgba(11, 13, 10, 0.9); border-left: 5px solid var(--amber); font-size: 13px; }
+#dmglog .dl-head { display: flex; justify-content: space-between; gap: 10px; padding-bottom: 7px; border-bottom: 1px solid #1f241a; font-size: 11px; letter-spacing: 0.16em; color: var(--dim); }
+#dmglog .dl-head b { display: block; font-size: 24px; font-weight: 700; font-stretch: 75%; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; line-height: 1.05; }
+#dmglog .dl-head .out b { color: var(--amber-hi); }
+#dmglog .dl-head .in { text-align: right; }
+#dmglog .dl-head .in b { color: var(--red); }
+#dmglog .dl-rows { display: grid; gap: 2px; margin-top: 6px; }
+#dmglog .dl-row { display: grid; grid-template-columns: 16px 1fr auto; align-items: baseline; gap: 6px; padding: 2px 4px; border-left: 3px solid var(--amber); background: rgba(236, 232, 214, 0.04); }
+#dmglog .dl-row.in { border-left-color: var(--red); }
+#dmglog .dl-row.kill { background: rgba(228, 85, 63, 0.16); }
+#dmglog .dl-row .ar { color: var(--amber); font-size: 12px; }
+#dmglog .dl-row.in .ar { color: var(--red); }
+#dmglog .dl-row .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#dmglog .dl-row .who small { margin-left: 6px; font-size: 10px; letter-spacing: 0.12em; color: var(--dim); }
+#dmglog .dl-row .pts { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--amber-hi); }
+#dmglog .dl-row.in .pts { color: var(--red); }
+#dmglog .dl-empty { margin: 8px 2px 4px; font-size: 12px; letter-spacing: 0.1em; color: var(--dim); }
+
 @media (prefers-reduced-motion: reduce) {
   #announce.pop #announce-main, #killfeed div, #lowhp.on { animation: none; }
   #lowhp.on { opacity: 0.3; }

@@ -10,6 +10,8 @@ const BINDINGS = {
   Space: 'fire',
   ArrowUp: 'fire',
   Tab: 'scores',
+  AltLeft: 'dmglog', // maintenu : journal des dégâts infligés / reçus
+  AltRight: 'dmglog',
   KeyQ: 'rangeDown', // A sur AZERTY : obusier, portée plus courte
   KeyE: 'rangeUp', // E : portée plus longue
 };
