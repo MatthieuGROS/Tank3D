@@ -123,7 +123,7 @@ export class Game {
 
   reconcile(me, ack) {
     while (this.pending.length && this.pending[0].seq <= ack) this.pending.shift();
-    const s = { x: me.x, z: me.z, yaw: me.yaw, speed: me.sp, ty: me.ty, reload: me.rl, rof: me.rf ?? 1, shots: me.bc ?? 0 };
+    const s = { x: me.x, z: me.z, yaw: me.yaw, speed: me.sp, ty: me.ty, reload: me.rl, rof: me.rf ?? 1, shots: me.bc ?? 0, aim: me.ad ?? 0 };
     for (const cmd of this.pending) stepTank(s, cmd, this.def, this.map, this.others, cmd.frozen);
 
     const old = this.pred;

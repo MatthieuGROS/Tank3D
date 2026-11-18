@@ -361,11 +361,13 @@ export class Hud {
     return { x: (px - b.g.canvas.width / 2) / b.scale, z: (py - b.g.canvas.height / 2) / b.scale, perPx: 1 / b.scale };
   }
 
-  // Repère de visée : là où l'obus va frapper.
-  setGunmark(pos) {
+  // Repère de visée : là où l'obus va frapper. L'anneau de rechargement a pour rayon (px) celui du cercle
+  // de dispersion (rayon absent ou petit : taille minimale).
+  setGunmark(pos, radius = 0) {
     const el = this.el.gunmark;
     el.style.display = pos ? '' : 'none';
     if (!pos) return;
+    el.style.setProperty('--d', `${Math.max(34, radius * 2)}px`);
     el.style.left = `${pos.x}px`;
     el.style.top = `${pos.y}px`;
     this.el.hitmarker.style.left = el.style.left;
@@ -506,6 +508,11 @@ export class Hud {
     this.el.board.replaceChildren(table, foot);
   }
 
+  // Cercle de dispersion de l'obusier sur la carte : { x, z, r } (monde), ou null.
+  setMapAim(aim) {
+    this.mapAim = aim;
+  }
+
   // dots = [{ x, z, ty, team, me, alive, fixed, size, obj }] ; pickups = [[id, kind, x, z]]
   // marks = [{ x, z, age, life, target }] : signalements des coéquipiers (anneaux pulsés)
   drawMinimap(dots, zone, pickups = [], marks = []) {
@@ -545,6 +552,20 @@ export class Hud {
       g.translate(x, y);
       g.rotate(Math.PI / 4);
       g.fillRect(-1.6, -1.6, 3.2, 3.2);
+      g.restore();
+    }
+
+    // obusier : zone où l'obus peut tomber (rayon de dispersion), au moins visible sur la mini-carte
+    const aim = this.mapAim;
+    if (aim) {
+      g.save();
+      g.beginPath();
+      g.arc(aim.x, aim.z, Math.max(aim.r, 2.5 * px), 0, Math.PI * 2);
+      g.fillStyle = 'rgba(255, 90, 60, 0.18)';
+      g.fill();
+      g.lineWidth = 1.2 * px;
+      g.strokeStyle = '#ff5a3c';
+      g.stroke();
       g.restore();
     }
 

@@ -11,7 +11,7 @@ import { MISSIONS, CHAPTERS, getMission } from '/shared/campaign.js';
 import { SKINS, DEFAULT_SKIN, skinUnlocked, unlockedSkins } from '/shared/skins.js';
 import { drawMapPreview } from '../hud.js';
 import { CampaignMap, difficultyRows } from '../campaignMap.js';
-import { $, el, html, fmtInt, ICON, CLASSES, tankClass, classIcon, rankBadge, StatBars, faceChips, reorder } from './kit.js';
+import { $, el, html, fmtInt, ICON, CLASSES, tankClass, classIcon, rankBadge, StatBars, AccuracyPanel, faceChips, reorder } from './kit.js';
 import { loadPortrait } from './portraits.js';
 
 const TANK_KEYS = Object.keys(TANK_TYPES);
@@ -44,6 +44,8 @@ export class Hub {
     this.shots = {}; // aperçus de carte déjà dessinés
     this.specBars = new StatBars($('sheet-stats'));
     this.storeBars = new StatBars($('store-stats'));
+    this.specAcc = new AccuracyPanel($('sheet-acc'));
+    this.storeAcc = new AccuracyPanel($('store-acc'));
     this.campaignMap = new CampaignMap($('cmap'), (id) => {
       this.mapFocus = id;
       this.render();
@@ -580,6 +582,7 @@ export class Hub {
     const type = this.shownTank(), def = TANK_TYPES[type], free = this.owned(type);
     $('sheet-desc').textContent = def.desc;
     this.specBars.update(def);
+    this.specAcc.update(def);
     const faces = faceChips(def);
     $('sheet-faces').replaceChildren(...(faces ? [el('div', 'sub-head', 'Dégâts reçus selon la face touchée'), faces] : []));
     $('sheet-lock').classList.toggle('hidden', free);
@@ -837,6 +840,7 @@ export class Hub {
     const eqDef = TANK_TYPES[equipped];
     const compare = type !== equipped;
     this.storeBars.update(def, compare ? eqDef : null);
+    this.storeAcc.update(def);
     $('store-compare').textContent = compare ? `Comparé à ${eqDef.name} (équipé)` : 'Ton char équipé';
     const faces = faceChips(def);
     $('store-faces').replaceChildren(...(faces ? [faces] : []));

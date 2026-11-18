@@ -1,5 +1,5 @@
 // Petites briques d'interface partagées : création d'éléments, icônes, jauges de caractéristiques.
-import { tankStats, FACE_DAMAGE } from '/shared/constants.js';
+import { tankStats, tankAccuracy, FACE_DAMAGE } from '/shared/constants.js';
 
 export const $ = (id) => document.getElementById(id);
 
@@ -143,6 +143,34 @@ export function faceChips(def) {
     wrap.append(chip);
   }
   return wrap;
+}
+
+// Détail de la précision (dispersion, temps de visée, malus de mouvement) : un volet replié par défaut,
+// pour ne pas surcharger la fiche. Créé une fois, puis mis à jour (il garde son état ouvert / fermé).
+export class AccuracyPanel {
+  constructor(container) {
+    this.root = el('details', 'acc');
+    const head = el('summary');
+    head.append(el('span', '', 'Détail de la précision'), html(ICON.chevron));
+    this.list = el('div', 'acc-list');
+    this.note = el('p', 'acc-note', 'Le cercle de visée se resserre quand le char est immobile et s’élargit en roulant, en pivotant ou en tournant la tourelle. Chaque tir l’élargit aussi.');
+    this.root.append(head, this.list, this.note);
+    container.append(this.root);
+  }
+
+  update(def) {
+    const rows = tankAccuracy(def);
+    this.root.classList.toggle('hidden', !rows);
+    if (!rows) return;
+    this.list.replaceChildren(...rows.map(([label, value, severity, hint]) => {
+      const row = el('div', 'acc-row');
+      row.title = hint;
+      const meter = el('i', 'acc-meter');
+      meter.style.setProperty('--v', severity);
+      row.append(el('span', 'acc-name', label), el('b', 'acc-val', value), meter);
+      return row;
+    }));
+  }
 }
 
 // Remet les enfants d'un conteneur dans l'ordre voulu sans les recréer (les images ne rechargent pas).

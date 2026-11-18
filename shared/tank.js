@@ -2,7 +2,7 @@
 // (prédiction). C'est ce qui permet au joueur de voir son char réagir instantanément
 // sans divergence avec le serveur.
 
-import { DT } from './constants.js';
+import { DT, ACCURACY } from './constants.js';
 import { collideCircle, collideDiscs, slopeAlong, heightAt } from './map.js';
 
 const TAU = Math.PI * 2;
@@ -19,7 +19,8 @@ export const lerpAngle = (a, b, t) => a + angleDiff(a, b) * t;
 
 // yaw = 0 regarde vers +Z ; l'avant vaut (sin yaw, cos yaw). yaw croissant = virage à gauche.
 export function createTankState(x, z, yaw) {
-  return { x, z, yaw, speed: 0, ty: yaw, reload: 0, rof: 1 }; // rof : multiplicateur de rechargement (bonus)
+  // rof : multiplicateur de rechargement (bonus) ; aim : « flou » de visée restant (0 = canon réglé, voir stepTank)
+  return { x, z, yaw, speed: 0, ty: yaw, reload: 0, rof: 1, aim: ACCURACY.spawnExtra };
 }
 
 // Commande d'un tick : f = avancer (-1..1), t = tourner la caisse (-1..1, + = gauche),
@@ -66,9 +67,24 @@ export function stepTank(s, inp, def, map, others, frozen) {
     }
   }
 
+  const ty0 = s.ty;
   s.ty = wrapAngle(s.ty + inp.tt * def.turretRate * DT);
   // canon en casemate : il suit la caisse et ne pivote que de ±traverse autour de son axe
   if (def.traverse != null) s.ty = wrapAngle(s.yaw + clamp(angleDiff(s.yaw, s.ty), -def.traverse, def.traverse));
+
+  if (def.acc) {
+    // Précision : le flou `aim` retombe avec le temps de visée, mais remonte aussitôt que le char
+    // roule, pivote ou tourne sa tourelle (chaque malus est proportionnel à la vitesse du geste).
+    const a = def.acc;
+    const moving = clamp(Math.abs(s.speed) / def.maxSpeed, 0, 1);
+    const turret = clamp(Math.abs(angleDiff(ty0, s.ty)) / (def.turretRate * DT), 0, 1);
+    const hull = Math.abs(t);
+    // comme dans WoT, les malus se combinent en quadrature (rouler ET tourner coûte moins que la somme)
+    const disturbance = Math.hypot(a.move * moving, a.turret * turret, a.hull * hull);
+    s.aim = ((s.aim ?? 0) * Math.exp((-ACCURACY.settle * DT) / a.aimTime));
+    if (s.aim < 0.002) s.aim = 0;
+    s.aim = Math.min(ACCURACY.maxExtra, Math.max(s.aim, disturbance));
+  }
 
   if (s.reload > 0) s.reload--;
   if (inp.fire && !frozen && s.reload === 0) {
@@ -82,9 +98,23 @@ export function stepTank(s, inp, def, map, others, frozen) {
       }
     }
     s.reload = Math.max(1, Math.round(wait));
+    // le tir part avec le flou de cet instant (`shotAim`) puis l'élargit pour le suivant
+    s.shotAim = s.aim ?? 0;
+    if (def.acc) s.aim = Math.min(ACCURACY.maxExtra, s.aim + ACCURACY.fireBloom);
     return true;
   }
   return false;
+}
+
+// Écart de tir aléatoire dans un disque de rayon `radius` (loi normale tronquée : la plupart des
+// obus tombent près du centre, quelques-uns vers le bord). Renvoie { h, v } : écart horizontal et vertical.
+export function scatter(radius) {
+  const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(TAU * Math.random());
+  for (let i = 0; i < 8; i++) {
+    const h = gauss() / 2, v = gauss() / 2; // écart-type = ½ rayon
+    if (h * h + v * v <= 1) return { h: h * radius, v: v * radius };
+  }
+  return { h: 0, v: 0 };
 }
 
 // Un point 3D touche-t-il le char `t` ({x, z, yaw}) ? Caisse = boîte orientée, tourelle = cylindre.

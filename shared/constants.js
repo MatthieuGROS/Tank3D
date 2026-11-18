@@ -29,6 +29,7 @@ export const TANK_TYPES = {
     turnRate: 1.8, // rad/s (caisse)
     turretRate: 1.7, // rad/s (tourelle)
     reloadTicks: 120, // 2 s → 1020 DPM
+    acc: { disp: 1.20, aimTime: 2.2, move: 1.8, turret: 2.4, hull: 2.6 },
     shellSpeed: 100, // m/s
     shellDamage: 340,
     shellLifeTicks: 150,
@@ -55,6 +56,7 @@ export const TANK_TYPES = {
     turnRate: 1.2,
     turretRate: 1.1,
     reloadTicks: 240, // 4 s
+    acc: { disp: 2.60, aimTime: 3.0, move: 1.6, turret: 2.0, hull: 2.6 },
     shellSpeed: 110,
     shellDamage: 550,
     shellLifeTicks: 150,
@@ -80,6 +82,7 @@ export const TANK_TYPES = {
     turnRate: 2.6,
     turretRate: 2.6,
     reloadTicks: 90, // 1,5 s
+    acc: { disp: 1.60, aimTime: 1.5, move: 1.4, turret: 0.9, hull: 1.0 },
     shellSpeed: 120,
     shellDamage: 200,
     shellLifeTicks: 120,
@@ -110,6 +113,7 @@ export const TANK_TYPES = {
     turretRate: 2.3,
     reloadTicks: 14, // entre deux obus d'une rafale
     burst: { shots: 3, pause: 200 }, // après le 3e obus : 3,3 s de rechargement
+    acc: { disp: 2.00, aimTime: 1.8, move: 1.6, turret: 1.0, hull: 1.1 },
     shellSpeed: 115,
     shellDamage: 170,
     shellLifeTicks: 110,
@@ -141,6 +145,7 @@ export const TANK_TYPES = {
     turretRate: 0.8,
     traverse: 0.21, // débattement du canon de part et d'autre de l'axe de la caisse (rad)
     reloadTicks: 210, // 3,5 s
+    acc: { disp: 0.45, aimTime: 3.2, move: 2.8, turret: 4.0, hull: 4.0 },
     shellSpeed: 160,
     shellDamage: 680,
     shellLifeTicks: 140,
@@ -169,6 +174,7 @@ export const TANK_TYPES = {
     turnRate: 1.6,
     turretRate: 1.3,
     reloadTicks: 270, // 4,5 s
+    acc: { disp: 6.00, aimTime: 3.2, move: 2.0, turret: 2.5, hull: 3.0 },
     shellSpeed: 0,
     shellDamage: 500, // dégâts au point d'impact, décroissants jusqu'au bord du souffle
     shellLifeTicks: 0,
@@ -212,6 +218,41 @@ export function faceCoef(def, yaw, fromDx, fromDz) {
 
 export const DEFAULT_TANK = 'standard';
 
+// ------------------------------------------------------------------ précision
+// Chaque char joueur a un bloc `acc` :
+//   disp     dispersion au repos, canon posé : rayon du cercle de visée en mètres à 100 m
+//   aimTime  temps de visée (s) : durée pour que le cercle revienne à son minimum (95 %)
+//   move     malus à pleine vitesse (0,9 = cercle +90 %), proportionnel à la vitesse
+//            (comme dans WoT, les trois malus se combinent en quadrature : √(move² + turret² + hull²))
+//   turret   malus tourelle à pleine vitesse de rotation
+//   hull     malus caisse qui pivote à pleine vitesse de rotation
+// Le cercle vaut disp × (1 + `aim`) : `aim` est le « flou » restant (voir stepTank).
+// Les unités de campagne (sans `acc`) restent gérées par leur propre imprécision.
+export const ACCURACY = {
+  settle: 3, // l'excédent de flou est divisé par e^3 (≈ 20) au bout de aimTime
+  fireBloom: 0.7, // flou ajouté par chaque tir (les rafales s'écartent peu à peu)
+  maxExtra: 8, // plafond du flou (cercle × 9 au maximum)
+  spawnExtra: 1, // flou à la réapparition : le canon n'est pas encore réglé
+};
+
+// Rayon angulaire (rad) du cercle de dispersion pour un flou `aim`.
+export const dispersionAngle = (def, aim = 0) => (def.acc.disp / 100) * (1 + aim);
+
+// Valeurs lisibles pour le détail de précision du salon : [libellé, valeur, gravité 0..1].
+export function tankAccuracy(def) {
+  const a = def.acc;
+  if (!a) return null;
+  const fr = (v, digits = 0) => v.toLocaleString('fr-FR', { maximumFractionDigits: digits, minimumFractionDigits: digits });
+  const pct = (v) => `+${Math.round(v * 100)} %`;
+  return [
+    ['Dispersion', `${fr(a.disp, 2)} m à 100 m`, Math.min(1, a.disp / 4), 'Rayon du cercle de visée, canon posé et réglé.'],
+    ['Temps de visée', `${fr(a.aimTime, 1)} s`, Math.min(1, a.aimTime / 4), 'Temps pour resserrer le cercle après un tir ou un mouvement.'],
+    ['En roulant', `${pct(a.move)} à pleine vitesse`, Math.min(1, a.move / 4.5), 'Le cercle s’élargit proportionnellement à la vitesse.'],
+    ['Tourelle', `${pct(a.turret)} à pleine rotation`, Math.min(1, a.turret / 4.5), 'Le cercle s’élargit quand on fait pivoter le canon (les malus se combinent sans s’additionner tout à fait).'],
+    ['Rotation de la caisse', `${pct(a.hull)} à pleine rotation`, Math.min(1, a.hull / 4.5), 'Le cercle s’élargit quand le char pivote sur lui-même.'],
+  ];
+}
+
 // Jauges affichées dans le salon : [libellé, remplissage 0..1, valeur lisible],
 // calculées à partir des vraies valeurs du char.
 export function tankStats(def) {
@@ -221,14 +262,20 @@ export function tankStats(def) {
   const cycle = (def.burst ? (shots - 1) * def.reloadTicks + def.burst.pause : def.reloadTicks) / TICK_RATE;
   const dpm = (def.shellDamage * shots * 60) / cycle; // DPM = dégâts par minute
   const power = def.burst ? `${shots} × ${def.shellDamage}` : def.weapon === 'mortar' ? `${def.shellDamage} en zone` : `${def.shellDamage} dégâts`;
+  // précision : dispersion au repos et temps de visée résumés en une seule jauge (détail : tankAccuracy)
+  const acc = def.acc
+    ? [['Précision', 0.65 * (1 - clampUnit((def.acc.disp - 0.3) / 2.7)) + 0.35 * (1 - clampUnit((def.acc.aimTime - 1) / 3)), `${fr(def.acc.disp, 2)} m · ${fr(def.acc.aimTime, 1)} s`]]
+    : [];
   return [
     ['Blindage', def.maxHp / 1800, `${def.maxHp} PV`],
     ['Puissance de feu', (def.shellDamage * shots) / 700, power],
     ['Cadence', 1.5 / cycle, `${fr(cycle, 1)} s · ${fr(dpm)} DPM`],
+    ...acc,
     ['Vitesse', def.maxSpeed / 18, `${fr(def.maxSpeed * 3.6)} km/h`],
     ['Maniabilité', def.turnRate / 2.8, `${fr((def.turnRate * 180) / Math.PI)}°/s`],
   ];
 }
+const clampUnit = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 // Portée de tir d'un obusier pour un réglage 0..1, et durée de vol de l'obus (ticks).
 export const arcRange = (def, setting) => def.minRange + (def.maxRange - def.minRange) * setting;

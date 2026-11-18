@@ -88,14 +88,22 @@ export class Effects {
     this.unconfirmed.push(key);
   }
 
-  // Le serveur confirme mon tir : on rattache l'obus déjà affiché à son identifiant officiel.
-  confirmLocalShell(id) {
+  // Le serveur confirme mon tir : on rattache l'obus déjà affiché à son identifiant officiel,
+  // et on le recale sur la vraie trajectoire (la dispersion est tirée côté serveur).
+  confirmLocalShell(id, ev) {
     while (this.unconfirmed.length) {
       const key = this.unconfirmed.shift();
       const s = this.shells.get(key);
       if (!s) continue;
       this.shells.delete(key);
       this.shells.set(id, s);
+      if (ev) {
+        s.dx = ev.dx;
+        s.dz = ev.dz;
+        s.vy = ev.vy;
+        s.mesh.rotation.y = Math.atan2(ev.dx, ev.dz);
+        s.mesh.rotation.x = ev.vy !== undefined ? -Math.atan(ev.vy) : 0;
+      }
       return true;
     }
     return false;

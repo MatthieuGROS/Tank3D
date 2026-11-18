@@ -1,6 +1,6 @@
 // Chef d'orchestre du client : relie réseau, simulation, rendu, HUD et salon.
 import {
-  DT, TICK_RATE, TEAM_INFO, TANK_TYPES, UNIT_TYPES, DEFAULT_TANK, RULES, PICKUPS, DIFFICULTIES, arcRange,
+  DT, TICK_RATE, TEAM_INFO, TANK_TYPES, UNIT_TYPES, DEFAULT_TANK, RULES, PICKUPS, DIFFICULTIES, arcRange, dispersionAngle,
 } from '/shared/constants.js';
 import { rankInfo, fmtCr } from '/shared/progress.js';
 import { MAPS, marchRay, pointBlocked, heightAt, inBush } from '/shared/map.js';
@@ -563,7 +563,7 @@ function wreckScale(type) {
 function onEvent(ev) {
   switch (ev.k) {
     case 'shot': {
-      if (ev.o === game.myId && fx.confirmLocalShell(ev.id)) break; // déjà affiché par la prédiction
+      if (ev.o === game.myId && fx.confirmLocalShell(ev.id, ev)) break; // déjà affiché par la prédiction
       const def = unitDef(game.roster.get(ev.o)?.type);
       const L = ev.L ?? def.barrelLength, speed = ev.sp ?? def.shellSpeed;
       fx.spawnShell(ev.id, ev.x, ev.y, ev.z, ev.dx, ev.dz, L, speed, ev.md ?? def.shellSpeed * def.shellLifeTicks * DT, ev.sz ?? 1, ev.vy, ev.g);
@@ -1192,23 +1192,40 @@ function updateHud(dt, mine, target) {
       if (game.pred.reload > reloadMax) reloadMax = def.burst.pause * rof;
       extra = `obus ${def.burst.shots - (game.pred.shots ?? 0)}/${def.burst.shots}`;
     }
-    let s;
+    let s, aimDist = 0, aimY = 0;
     $('help-range').classList.toggle('hidden', def.weapon !== 'mortar');
     if (def.weapon === 'mortar') {
       // obusier : point de chute au sol, à la portée réglée (A / E)
       const d = arcRange(def, input.range);
       const gx = mine.x + Math.sin(mine.ty) * d, gz = mine.z + Math.cos(mine.ty) * d;
-      fx.aimRing(gx, gz, def.splash);
-      s = renderer.project(gx, heightAt(gx, gz, game.map) + 0.3, gz);
+      // le cercle au sol est le rayon de dispersion : l'obus retombe n'importe où à l'intérieur
+      const R = Math.max(0.5, dispersionAngle(def, game.pred.aim ?? 0) * d);
+      fx.aimRing(gx, gz, R);
+      hud.setMapAim({ x: gx, z: gz, r: R });
+      aimY = heightAt(gx, gz, game.map) + 0.3;
+      s = renderer.project(gx, aimY, gz);
+      aimDist = d;
       extra = `${Math.round(d)} m`;
     } else {
       fx.aimRing(null);
+      hud.setMapAim(null);
       const shot = shotProfile(mine, def);
       const d = impactDistance(mine, def, shot);
-      s = renderer.project(mine.x + Math.sin(mine.ty) * d, shellHeight(shot.y0, d, shot.vy, shot.g), mine.z + Math.cos(mine.ty) * d);
+      aimY = shellHeight(shot.y0, d, shot.vy, shot.g);
+      s = renderer.project(mine.x + Math.sin(mine.ty) * d, aimY, mine.z + Math.cos(mine.ty) * d);
+      aimDist = d;
     }
     hud.setStatus(def.name, mine.hp, mine.maxHp ?? def.maxHp, game.pred.reload, Math.round(reloadMax), extra);
-    hud.setGunmark(s.front ? s : null);
+    // l'anneau de visée a le rayon de dispersion à la distance de l'impact, converti en pixels
+    let aimRadius = 0;
+    if (s.front && def.acc && def.weapon !== 'mortar') {
+      const R = dispersionAngle(def, game.pred.aim ?? 0) * aimDist;
+      const ex = mine.x + Math.sin(mine.ty) * aimDist + Math.cos(mine.ty) * R;
+      const ez = mine.z + Math.cos(mine.ty) * aimDist - Math.sin(mine.ty) * R;
+      const e = renderer.project(ex, aimY, ez);
+      aimRadius = e.front ? Math.hypot(e.x - s.x, e.y - s.y) : 0;
+    }
+    hud.setGunmark(s.front ? s : null, aimRadius);
     aimPoint = s.front ? s : null;
     hud.setSpectate('');
     // bonus actifs : ce qu'il reste en tirs faits (cadence, perforants) ou en impacts reçus (bouclier)
@@ -1220,6 +1237,7 @@ function updateHud(dt, mine, target) {
   } else {
     hud.setStatus(def.name, 0, def.maxHp, 0, def.reloadTicks);
     hud.setGunmark(null);
+    hud.setMapAim(null);
     fx.aimRing(null);
     aimPoint = null;
     hud.setBuffs([]);

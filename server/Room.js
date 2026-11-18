@@ -4,14 +4,14 @@
 // (missions contre l'IA, pilotées par server/Campaign.js).
 import {
   TICK_MS, DT, TICK_RATE, SNAPSHOT_INTERVAL, TEAMS, TANK_TYPES, UNIT_TYPES, DEFAULT_TANK, RULES,
-  DIFFICULTIES, CAMPAIGN_RULES, arcRange, arcFlight, faceCoef,
+  DIFFICULTIES, CAMPAIGN_RULES, arcRange, arcFlight, faceCoef, dispersionAngle,
 } from '../shared/constants.js';
 import {
   rankIndex, RANKS, tankOwned, ownedTanks, tankPrice, fmtCr, skirmishXp, missionXp, skirmishCredits, missionCredits, sumParts,
 } from '../shared/progress.js';
 import { MAPS, DEFAULT_MAP, pointBlocked, withBroken, objectAt, objectKey, DESTRUCTIBLE, heightAt } from '../shared/map.js';
 import { MISSIONS, MISSION_INDEX, mapFor, getMission } from '../shared/campaign.js';
-import { createTankState, stepTank, sanitizeInput, pointHitsTank, shellHeight, arcPoint, autoPitch } from '../shared/tank.js';
+import { createTankState, stepTank, sanitizeInput, pointHitsTank, shellHeight, arcPoint, autoPitch, scatter } from '../shared/tank.js';
 import { NavGrid, BotBrain } from './Bot.js';
 import { UnitBrain } from './Enemy.js';
 import { Campaign, isUnlocked } from './Campaign.js';
@@ -613,6 +613,7 @@ export class Room {
         };
         if (p.tank.rof !== 1) o.rf = p.tank.rof;
         if (p.tank.shots) o.bc = p.tank.shots; // obus déjà tirés dans la rafale en cours
+        if (p.tank.aim > 0.005) o.ad = +p.tank.aim.toFixed(3); // flou de visée (cercle de précision)
         if (p.buffs?.shield > 0 || p.invuln > 0 || this.campaign.isShielded(p)) o.sh = 1;
         if (p.buffs && (p.buffs.rapid || p.buffs.damage || p.buffs.shield)) o.bf = [p.buffs.rapid, p.buffs.damage, p.buffs.shield];
         if (!p.alive && p.respawn > 0) o.rs = p.respawn;
@@ -854,18 +855,32 @@ export class Room {
       // obusier d'un joueur : l'obus tombe dans l'axe du canon, à la portée qu'il a réglée
       const d = p.bot ? 40 : arcRange(def, p.range ?? 0.5);
       const aim = (p.bot && p.aimPoint) || { x: p.tank.x + Math.sin(p.tank.ty) * d, z: p.tank.z + Math.cos(p.tank.ty) * d };
+      const err = this.shotError(p, def);
+      if (err) {
+        // l'obus retombe n'importe où dans le cercle de dispersion, autour du point visé
+        aim.x += Math.cos(p.tank.ty) * err.h * d + Math.sin(p.tank.ty) * err.v * d;
+        aim.z += -Math.sin(p.tank.ty) * err.h * d + Math.cos(p.tank.ty) * err.v * d;
+      }
       const flight = arcFlight(def, Math.hypot(aim.x - p.tank.x, aim.z - p.tank.z));
       this.fireArc(p, aim.x, aim.z, { damage: def.shellDamage, splash: def.splash, flight });
       if (this.isCampaign && !p.unit) this.campaign.onFire(p);
       return;
     }
     const ty = p.tank.ty;
+    const err = this.shotError(p, def);
     for (const off of def.barrels ?? [0]) {
       const a = ty + (def.spread ? (Math.random() * 2 - 1) * def.spread : 0);
-      this.spawnShell(p, def, p.tank.x + Math.cos(ty) * off, p.tank.z - Math.sin(ty) * off, a);
+      this.spawnShell(p, def, p.tank.x + Math.cos(ty) * off, p.tank.z - Math.sin(ty) * off, a, err);
     }
     if (this.isCampaign && !p.unit) this.campaign.onFire(p); // bonus comptés en tirs
     // (les rafales sont gérées par la simulation du char : shared/tank.js)
+  }
+
+  // Dispersion d'un tir de joueur : écart tiré au hasard dans le cercle de précision au moment du tir,
+  // { h, v } en radians. Rien pour l'IA et les unités de campagne, qui ont leur propre imprécision.
+  shotError(p, def) {
+    if (p.bot || p.unit || !def.acc) return null;
+    return scatter(dispersionAngle(def, p.tank.shotAim ?? 0));
   }
 
   // Salve en éventail (boss) : n obus répartis sur `spread` radians.
@@ -877,7 +892,7 @@ export class Room {
     }
   }
 
-  spawnShell(p, def, x, z, angle) {
+  spawnShell(p, def, x, z, angle, err = null) {
     // carte à relief : le canon part de l'altitude du sol, avec visée verticale automatique
     // (sans cible dans la ligne de tir, l'obus vole à hauteur commune au-dessus du sol `g`)
     let y0 = def.muzzleHeight, vy, g = 0;
@@ -886,8 +901,10 @@ export class Room {
       y0 += g;
       const foes = [];
       for (const o of this.roundPlayers()) if (o.alive && o.team !== p.team) foes.push(o.tank);
-      vy = autoPitch(x, z, angle, y0, foes, this.map, def.shellSpeed);
+      vy = autoPitch(x, z, angle, y0, foes, this.map, def.shellSpeed); // visée sur la cible, avant dispersion
+      if (vy !== undefined && err) vy += err.v;
     }
+    if (err) angle += err.h;
     const s = {
       id: this.nextShellId++, owner: p.id, team: p.team, vy, g,
       x, y: y0, y0, z, dist: 0,
