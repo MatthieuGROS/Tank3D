@@ -133,7 +133,16 @@ input:focus { box-shadow: inset 0 0 0 1px var(--amber), 0 0 0 3px rgba(245, 179,
 .pips i { width: 7px; height: 16px; background: #0d0f0b; transform: skewX(-14deg); }
 .pips i.dead { opacity: 0.25; }
 
-#cap { position: absolute; top: 62px; left: 50%; transform: translateX(-50%); width: 280px; text-align: center; font-size: 12px; letter-spacing: 0.18em; text-shadow: 0 1px 2px #000; }
+/* œil de détection : s'ouvre quand on est repéré, se ferme puis s'efface quand on ne l'est plus */
+#spotted { position: absolute; top: 58px; left: 50%; width: 46px; height: 27px; margin-left: -23px; opacity: 0; transition: opacity 0.2s 0.2s; filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.6)); }
+#spotted svg { display: block; width: 100%; height: 100%; transform: scaleY(0.08); transition: transform 0.18s ease-in; }
+#spotted .lid { fill: var(--bone); stroke: var(--ink); stroke-width: 2; }
+#spotted .iris { fill: var(--red); }
+#spotted .pupil { fill: var(--ink); }
+#spotted.on { opacity: 1; transition: opacity 0.1s; }
+#spotted.on svg { transform: scaleY(1); transition: transform 0.2s 0.05s ease-out; }
+
+#cap { position: absolute; top: 92px; left: 50%; transform: translateX(-50%); width: 280px; text-align: center; font-size: 12px; letter-spacing: 0.18em; text-shadow: 0 1px 2px #000; }
 #cap .track { height: 8px; margin-top: 4px; background: rgba(8, 10, 7, 0.8); }
 
 #announce { position: absolute; top: 22%; left: 0; right: 0; text-align: center; text-shadow: 0 3px 0 rgba(0, 0, 0, 0.55); }

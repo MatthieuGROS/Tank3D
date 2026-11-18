@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { TEAM_INFO } from '/shared/constants.js';
 import { propBuilders } from './props.js';
 import { heightAt } from '/shared/map.js';
+import { BUSH_CLEAR } from '/shared/vision.js';
 
 // Petit générateur pseudo-aléatoire déterministe : tout le monde voit le même décor.
 function rng(seed) {
@@ -226,6 +227,8 @@ export function createMapModel(map) {
 
 // Buissons : touffes de feuillage sans collision (shared/props.js : bush). Un char peut s'y cacher ;
 // les touffes proches d'un char bougent un peu pour que le buisson ne paraisse pas figé.
+// Les touffes à moins de BUSH_CLEAR m du char suivi par la caméra deviennent transparentes à 90 % :
+// ce feuillage-là ne gêne pas sa vue (shared/vision.js).
 function buildBushes(map, theme, mat, group) {
   const blobs = [];
   const leaf = [mat(theme.leaf[0]), mat(theme.leaf[1]), mat(0x4a8a40)];
@@ -239,22 +242,35 @@ function buildBushes(map, theme, mat, group) {
         const x = f.x - f.w / 2 + ((i + 0.5 + (r() - 0.5) * 0.7) * f.w) / cols;
         const z = f.z - f.d / 2 + ((j + 0.5 + (r() - 0.5) * 0.7) * f.d) / rows;
         const s = 1.5 + r() * 0.7;
-        const mesh = new THREE.Mesh(geo, leaf[Math.floor(r() * leaf.length)]);
+        // matériau propre à chaque touffe : elle peut s'effacer seule
+        const mesh = new THREE.Mesh(geo, leaf[Math.floor(r() * leaf.length)].clone());
         mesh.scale.set(s, s * (1.15 + r() * 0.3), s);
         mesh.position.set(x, heightAt(x, z, map) + s * 0.95, z);
         mesh.rotation.y = r() * 6;
         mesh.receiveShadow = true;
         group.add(mesh);
-        blobs.push({ mesh, x, z, phase: r() * 6.28, amp: 0, near: s + 2.4 });
+        blobs.push({ mesh, x, z, phase: r() * 6.28, amp: 0, near: s + 2.4, alpha: 1 });
       }
     }
   }
   return {
     // views : Map id -> { x, z, speed, alive } ; time en secondes
-    update(views, time, dt) {
+    // viewer = { x, z } du char suivi par la caméra (ou null)
+    update(views, time, dt, viewer = null) {
       if (!blobs.length) return;
       const ease = 1 - Math.exp(-dt * 5);
+      const fade = 1 - Math.exp(-dt * 8);
       for (const b of blobs) {
+        const near = viewer && (b.x - viewer.x) ** 2 + (b.z - viewer.z) ** 2 < BUSH_CLEAR * BUSH_CLEAR;
+        const alpha = b.alpha + ((near ? 0.1 : 1) - b.alpha) * fade;
+        b.alpha = Math.abs(alpha - 1) < 0.01 ? 1 : alpha;
+        const m = b.mesh.material, see = b.alpha < 1;
+        if (m.transparent !== see) {
+          m.transparent = see;
+          m.depthWrite = !see;
+          m.needsUpdate = true;
+        }
+        m.opacity = b.alpha;
         let target = 0;
         for (const v of views.values()) {
           if (!v.alive) continue;

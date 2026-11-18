@@ -12,6 +12,7 @@ import {
 import { MAPS, DEFAULT_MAP, pointBlocked, withBroken, objectAt, objectKey, DESTRUCTIBLE, heightAt } from '../shared/map.js';
 import { MISSIONS, MISSION_INDEX, mapFor, getMission } from '../shared/campaign.js';
 import { createTankState, stepTank, sanitizeInput, pointHitsTank, shellHeight, arcPoint, autoPitch, scatter } from '../shared/tank.js';
+import { detects, SPOT_LINGER, FIRE_REVEAL } from '../shared/vision.js';
 import { NavGrid, BotBrain } from './Bot.js';
 import { UnitBrain } from './Enemy.js';
 import { Campaign, isUnlocked } from './Campaign.js';
@@ -24,6 +25,7 @@ const BOT_NAMES = ['Sgt Morel', 'Cpl Vasseur', 'Lt Garnier', 'Adj Roche', 'Sgt K
 const SHELL_STEP = 0.25; // m, pas de test de collision des obus
 const ALL_TANKS = process.env.TANK3D_UNLOCK === '1'; // tous les chars débloqués (tests)
 const MODES = ['skirmish', 'campaign'];
+const VISION_INTERVAL = 3; // ticks entre deux calculs de détection (20 Hz)
 
 export class Room {
   constructor({ lanUrls = [] } = {}) {
@@ -125,6 +127,7 @@ export class Room {
     } else if (live) {
       this.stepTanks();
       this.stepShells();
+      if (this.tick % VISION_INTERVAL === 0) this.stepVision();
     }
     if (this.phase === 'playing' && !this.paused) {
       if (this.isCampaign) {
@@ -618,6 +621,7 @@ export class Room {
         if (p.buffs && (p.buffs.rapid || p.buffs.damage || p.buffs.shield)) o.bf = [p.buffs.rapid, p.buffs.damage, p.buffs.shield];
         if (!p.alive && p.respawn > 0) o.rs = p.respawn;
         if (p.buffs?.damage > 0) o.db = 1;
+        if (p.spotted) o.vi = 1; // visible par l'équipe adverse
         return o;
       }),
     };
@@ -702,6 +706,9 @@ export class Room {
     p.lastQueuedSeq = p.lastSeq;
     p.respawn = 0;
     p.dmgMul = 1;
+    p.seenTick = -Infinity; // personne n'est détecté en début de manche
+    p.firedTick = -Infinity;
+    p.spotted = false;
   }
 
   // Chaque manche (ou mission) repart d'un décor intact.
@@ -843,6 +850,27 @@ export class Room {
     }
   }
 
+  // Détection (shared/vision.js) : p.spotted = visible par l'équipe adverse. Un char repéré par un seul
+  // adversaire l'est pour toute l'équipe, et le reste SPOT_LINGER s après la dernière détection.
+  // En campagne, tout le monde reste visible (missions, objectifs et IA n'en tiennent pas compte).
+  stepVision() {
+    const all = this.roundPlayers();
+    if (this.isCampaign) {
+      for (const p of all) p.spotted = true;
+      return;
+    }
+    const linger = SPOT_LINGER * TICK_RATE, fireWin = FIRE_REVEAL * TICK_RATE;
+    const eyes = new Map(all.map((p) => [p, {
+      t: p.tank, dims: this.defOf(p), fired: this.tick - (p.firedTick ?? -Infinity) <= fireWin,
+    }]));
+    for (const p of all) {
+      if (!p.alive) { p.spotted = false; continue; }
+      const me = eyes.get(p);
+      if (all.some((o) => o.alive && o.team !== p.team && detects(eyes.get(o), me, this.map))) p.seenTick = this.tick;
+      p.spotted = this.tick - p.seenTick <= linger;
+    }
+  }
+
   // Multiplicateur de dégâts du tireur (difficulté pour l'IA, bonus « obus perforants » pour l'escouade).
   dmgMulOf(p) {
     return (p.dmgMul ?? 1) * (p.buffs?.damage > 0 ? 1.6 : 1);
@@ -851,6 +879,7 @@ export class Room {
   // Tir d'une unité selon son arme : canon(s), rafales, mortier.
   fire(p, def) {
     if (def.weapon === null) return;
+    p.firedTick = this.tick; // les buissons proches ne cachent plus le tireur (shared/vision.js)
     if (def.weapon === 'mortar') {
       // obusier d'un joueur : l'obus tombe dans l'axe du canon, à la portée qu'il a réglée
       const d = p.bot ? 40 : arcRange(def, p.range ?? 0.5);
@@ -1021,6 +1050,9 @@ export class Room {
       p.brain?.alert?.();
       amount = this.campaign.modifyDamage(p, amount, byId);
     }
+    // un char touché est détecté par l'équipe adverse pendant SPOT_LINGER s
+    p.seenTick = this.tick;
+    p.spotted = true;
     amount = Math.round(amount);
     if (amount <= 0) return;
     amount = Math.min(amount, p.hp);

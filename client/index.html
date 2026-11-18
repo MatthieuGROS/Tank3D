@@ -19,6 +19,15 @@
       <div class="sb-team blue"><div class="sb-score" id="score-blue">0</div><div class="pips" id="alive-blue"></div></div>
     </div>
 
+    <!-- œil de détection : ouvert tant que mon char est repéré par l'équipe adverse -->
+    <div id="spotted" title="Repéré">
+      <svg viewBox="0 0 48 28" aria-hidden="true">
+        <path class="lid" d="M3 14 Q24 -6 45 14 Q24 34 3 14 Z" />
+        <circle class="iris" cx="24" cy="14" r="6.5" />
+        <circle class="pupil" cx="24" cy="14" r="2.6" />
+      </svg>
+    </div>
+
     <div id="mission" class="hidden">
       <div class="m-head"><span id="m-name"></span><span id="m-time">0:00</span></div>
       <div class="m-obj"><span id="m-obj"></span><b id="m-val"></b></div>

@@ -13,13 +13,28 @@ const CAM_DIST = 12.5;
 const CAM_PITCH = -0.17; // légère plongée
 const CAM_TARGET_Y = 3.2;
 const FX_RANGE = 120; // au-delà, on n'émet plus de poussière / fumée
+const GHOST_LAYER = 1; // calque des chars ennemis détectés, redessinés en silhouette derrière le décor
+const TANK_LAYER = 2; // calque de tous les chars : la silhouette n'apparaît pas à travers un autre char
 
 export class Renderer {
   constructor(canvas) {
-    this.gl = new THREE.WebGLRenderer({ canvas, antialias: true });
+    this.gl = new THREE.WebGLRenderer({ canvas, antialias: true, stencil: true }); // stencil : silhouettes
     this.gl.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.gl.shadowMap.enabled = true;
     this.gl.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    // Silhouettes : 1) on marque (stencil) les pixels où un char, quel qu'il soit, est réellement visible ;
+    // 2) on dessine la silhouette de l'ennemi là où il est derrière le décor (profondeur plus grande) et non marqué.
+    this.ghostMark = new THREE.MeshBasicMaterial({
+      colorWrite: false, depthWrite: false, depthFunc: THREE.LessEqualDepth,
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4,
+      stencilWrite: true, stencilRef: 1, stencilFunc: THREE.AlwaysStencilFunc, stencilZPass: THREE.ReplaceStencilOp,
+    });
+    this.ghostMat = new THREE.MeshBasicMaterial({
+      color: 0xff5a3c, transparent: true, opacity: 0.45, fog: false, depthWrite: false, depthFunc: THREE.GreaterDepth,
+      stencilWrite: true, stencilRef: 1, stencilFunc: THREE.NotEqualStencilFunc, stencilZPass: THREE.ReplaceStencilOp, // chaque pixel une seule fois
+    });
+    this.ghostCount = 0;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(SKY);
@@ -115,6 +130,7 @@ export class Renderer {
       recoil: 0, pitch: 0, pitchV: 0, roll: 0, rollV: 0,
       lastSpeed: 0, lastYaw: null, accel: 0, wheel: 0, dust: 0, mark: 0, exhaust: 0, smoke: 0,
     };
+    t.model.group.traverse((o) => o.layers.enable(TANK_LAYER));
     this.scene.add(t.model.group);
     return t;
   }
@@ -147,6 +163,7 @@ export class Renderer {
     }
     const cam = this.camera.position;
     SKIN_TIME.value = performance.now() / 1000; // reflets animés des skins
+    let ghosts = 0;
     for (const [id, v] of views) {
       let t = this.tanks.get(id);
       if (!t || t.team !== v.team || t.type !== v.type || t.skin !== v.skin) {
@@ -159,9 +176,23 @@ export class Renderer {
         t.model.setWrecked(t.wrecked);
       }
       this.setBubble(t, !!v.shield && v.alive, (UNIT_TYPES[v.type] ?? UNIT_TYPES[DEFAULT_TANK]).radius, performance.now() / 1000);
-      this.animateTank(t, v, dt, Math.hypot(v.x - cam.x, v.z - cam.z) < FX_RANGE);
+      // char ennemi non détecté : invisible, et sans poussière ni fumée qui le trahiraient
+      t.model.group.visible = !v.hidden;
+      // char ennemi détecté : sa silhouette reste visible derrière le décor (passe GHOST_LAYER de render())
+      const ghost = !!v.ghost;
+      if (t.ghost !== ghost) {
+        t.ghost = ghost;
+        t.model.group.traverse((o) => (ghost ? o.layers.enable(GHOST_LAYER) : o.layers.disable(GHOST_LAYER)));
+      }
+      if (ghost) {
+        ghosts++;
+        this.ghostMat.color.set(TEAM_INFO[v.team]?.color ?? 0xff5a3c);
+      }
+      this.animateTank(t, v, dt, !v.hidden && Math.hypot(v.x - cam.x, v.z - cam.z) < FX_RANGE);
     }
-    this.mapModel?.bushes.update(views, performance.now() / 1000, dt);
+    // bushViewer = char suivi par la caméra (main.js) : le feuillage autour de lui devient transparent
+    this.ghostCount = ghosts;
+    this.mapModel?.bushes.update(views, performance.now() / 1000, dt, this.bushViewer?.alive ? this.bushViewer : null);
   }
 
   animateTank(t, v, dt, emit) {
@@ -424,6 +455,24 @@ export class Renderer {
   }
 
   render() {
-    this.gl.render(this.scene, this.camera);
+    const gl = this.gl, scene = this.scene, cam = this.camera;
+    gl.render(scene, cam);
+    if (!this.ghostCount) return;
+    // silhouettes des ennemis détectés : deux passes sur leur seul calque, sans effacer l'image ni la profondeur
+    const mask = cam.layers.mask, bg = scene.background;
+    gl.autoClear = false;
+    gl.shadowMap.autoUpdate = false;
+    scene.background = null;
+    cam.layers.set(TANK_LAYER);
+    scene.overrideMaterial = this.ghostMark;
+    gl.render(scene, cam);
+    cam.layers.set(GHOST_LAYER);
+    scene.overrideMaterial = this.ghostMat;
+    gl.render(scene, cam);
+    scene.overrideMaterial = null;
+    cam.layers.mask = mask;
+    scene.background = bg;
+    gl.shadowMap.autoUpdate = true;
+    gl.autoClear = true;
   }
 }

@@ -3,7 +3,7 @@ import {
   DT, TICK_RATE, TEAM_INFO, TANK_TYPES, UNIT_TYPES, DEFAULT_TANK, RULES, PICKUPS, DIFFICULTIES, arcRange, dispersionAngle,
 } from '/shared/constants.js';
 import { rankInfo, fmtCr } from '/shared/progress.js';
-import { MAPS, marchRay, pointBlocked, heightAt, inBush } from '/shared/map.js';
+import { MAPS, pointBlocked, heightAt } from '/shared/map.js';
 import { getMission } from '/shared/campaign.js';
 import { pointHitsTank, shellHeight, autoPitch } from '/shared/tank.js';
 import { SKINS, DEFAULT_SKIN, unlockedSkins } from '/shared/skins.js';
@@ -605,8 +605,6 @@ function onEvent(ev) {
         const v = views.get(ev.id);
         if (v) damageNumber(v.x, v.gy + unitDef(v.type).height + 1.6, v.z, `-${ev.d}`, ev.hp <= 0 ? 'kill' : '');
       }
-      // un char touché par mon équipe reste visible (barre de vie) 5 s, même dans un buisson
-      if (ev.d > 0 && ev.by != null && game.roster.get(ev.by)?.team === game.me?.team) revealUntil.set(ev.id, time + REVEAL_SECONDS);
       if (ev.id === game.myId) {
         hud.damageFlash();
         renderer.shake = 0.7;
@@ -848,25 +846,10 @@ function shotProfile(p, def) {
   if (!map.hills) return { y0: def.muzzleHeight, vy: undefined, g: 0 };
   const g = heightAt(p.x, p.z, map), y0 = def.muzzleHeight + g;
   const foes = [];
-  for (const v of views.values()) if (v.alive && v.team !== game.me?.team && v.id !== game.myId) foes.push(v);
+  for (const v of views.values()) if (v.alive && !v.hidden && v.team !== game.me?.team && v.id !== game.myId) foes.push(v);
   return { y0, vy: autoPitch(p.x, p.z, p.ty, y0, foes, map, def.shellSpeed), g };
 }
 
-// Barres de vie : un char ennemi dans un buisson n'affiche pas la sienne, sauf 5 s après avoir été touché.
-const REVEAL_SECONDS = 5;
-const revealUntil = new Map(); // id -> instant (time) jusqu'auquel le char reste visible
-const hiddenInBush = (v, ally, spectator) => !ally && !spectator && inBush(v.x, v.z, game.map) && !((revealUntil.get(v.id) ?? 0) > time);
-
-// Y a-t-il une ligne de vue dégagée entre deux chars ?
-function canSee(a, b) {
-  const dx = b.x - a.x, dz = b.z - a.z;
-  const d = Math.hypot(dx, dz);
-  if (d < 4) return true;
-  const map = game.map;
-  if (!map.hills) return marchRay(a.x, 2.2, a.z, dx / d, 0, dz / d, d - 2, 1, map) >= d - 2;
-  const oy = heightAt(a.x, a.z, map) + 2.2;
-  return marchRay(a.x, oy, a.z, dx / d, (heightAt(b.x, b.z, map) + 1.5 - oy) / d, dz / d, d - 2, 1, map) >= d - 2;
-}
 
 // Chars que je peux observer : tous les joueurs pour un spectateur, mes coéquipiers si mon char est détruit.
 function watchList() {
@@ -1051,7 +1034,14 @@ function frame(now) {
       v.skin = r?.skin ?? DEFAULT_SKIN;
       v.unit = !!r?.unit;
       v.obj = !!r?.obj;
+      v.spotted = !!p.vi;
       views.set(id, v);
+    }
+    // dissimulation : un ennemi vivant non détecté par mon équipe est invisible (sauf pour un spectateur)
+    const myTeam = game.me?.team, spectator = isSpectator(), ghosts = !spectator && !isCampaign();
+    for (const v of views.values()) {
+      v.hidden = !spectator && v.alive && v.team !== myTeam && !v.spotted;
+      v.ghost = ghosts && v.alive && v.team !== myTeam && v.spotted; // silhouette derrière le décor (escarmouche)
     }
   }
   renderer.syncTanks(views, dt);
@@ -1062,6 +1052,7 @@ function frame(now) {
   const garage = !!me && game.phase === 'lobby';
   renderer.setShowcase(garage ? hub.showcaseType() : null, garage ? me.team : null, garage ? me.skin ?? DEFAULT_SKIN : null);
   const target = cameraTarget();
+  renderer.bushViewer = target; // buissons à moins de 10 m de lui : transparents (pris en compte à l'image suivante)
   if (target) {
     renderer.followCamera(target.x, target.z, target.ty, dt, camId !== target.id);
     listener = target;
@@ -1096,7 +1087,7 @@ function impactDistance(mine, def, shot) {
   for (let d = 0.5; d <= 140; d += 0.5) {
     const x = mine.x + dx * d, y = shellHeight(shot.y0, d, shot.vy, shot.g), z = mine.z + dz * d;
     if (pointBlocked(x, y, z, game.map)) return d;
-    for (const v of views.values()) if (v.id !== game.myId && pointHitsTank(x, y, z, v, unitDef(v.type), v.gy)) return d;
+    for (const v of views.values()) if (v.id !== game.myId && !v.hidden && pointHitsTank(x, y, z, v, unitDef(v.type), v.gy)) return d;
   }
   return 140;
 }
@@ -1143,7 +1134,7 @@ function updateHud(dt, mine, target) {
     if (udef.boss && v.alive) boss = { name: udef.name, hp: v.hp, max: v.maxHp, shield: v.shield };
     const ally = v.team === myTeam;
     // les unités fixes restent sur la carte une fois repérées : on les montre toujours
-    const visible = ally || spectator || !target || udef.static || (v.alive && canSee(target, v));
+    const visible = !v.hidden;
     if (visible) {
       dots.push({
         id: v.id, name: v.unit ? '' : game.roster.get(v.id)?.name, enemy: !ally && !spectator,
@@ -1155,7 +1146,7 @@ function updateHud(dt, mine, target) {
       const c = renderer.project(v.x, v.gy + udef.height * 0.5, v.z);
       if (c.front) seenEnemies.set(v.id, { x: v.x, z: v.z, sx: c.x, sy: c.y });
     }
-    if (v.id === target?.id || !v.alive || !visible || udef.boss || hiddenInBush(v, ally, spectator)) continue;
+    if (v.id === target?.id || !v.alive || !visible || udef.boss) continue;
     // étiquettes : joueurs, objectifs, et unités proches ou entamées
     const dist = target ? Math.hypot(v.x - target.x, v.z - target.z) : 0;
     const marked = targeted.has(v.id);
@@ -1262,6 +1253,7 @@ function updateHud(dt, mine, target) {
     hud.setSpectate(text, hint);
   }
 
+  hud.setSpotted(!!mine?.alive && !spectator && mine.spotted && !campaign);
   hud.setScoreboard(input.has('scores'), game.roster);
   hud.setDamageLog(input.has('dmglog'));
   hud.setNetInfo(`ping ${Math.round(net.rtt)} ms · tampon ${Math.round(game.interpDelay)} ms`);

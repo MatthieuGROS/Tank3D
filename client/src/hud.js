@@ -105,7 +105,7 @@ export class Hud {
       spectate: $('spectate'), net: $('netinfo'), board: $('scoreboard'),
       scorebar: $('scorebar'), mission: $('mission'), mName: $('m-name'), mObj: $('m-obj'), mVal: $('m-val'), mFill: $('m-fill'),
       mLives: $('m-lives'), mTime: $('m-time'), boss: $('bossbar'), bossName: $('boss-name'), bossFill: $('boss-fill'), bossHp: $('boss-hp'),
-      toasts: $('toasts'), buffs: $('buffs'), dmglog: $('dmglog'),
+      toasts: $('toasts'), buffs: $('buffs'), dmglog: $('dmglog'), spotted: $('spotted'),
     };
     this.dlog = { rows: [], total: { out: 0, in: 0 }, dirty: true, shown: false };
     this.tags = new Map();
@@ -400,6 +400,13 @@ export class Hud {
       small.innerHTML = hint;
       this.el.spectate.append(small);
     }
+  }
+
+  // Œil de détection : mon char est-il repéré par l'équipe adverse ?
+  setSpotted(on) {
+    if (this.spottedOn === on) return;
+    this.spottedOn = on;
+    this.el.spotted.classList.toggle('on', on);
   }
 
   setNetInfo(text) {

@@ -167,10 +167,11 @@ export class BotBrain {
     const me = p.tank, map = room.map;
     const cmd = { f: 0, t: 0, tt: 0, fire: false };
 
-    // --- perception : ennemi le plus proche, et le plus proche en vue directe
+    // --- perception : ennemi détecté le plus proche, et le plus proche en vue directe
+    // (un ennemi non détecté par l'équipe est invisible, pour les bots comme pour les joueurs)
     let nearest = null, nearestD = Infinity, target = null, targetD = Infinity;
     for (const o of room.roundPlayers()) {
-      if (!o.alive || o.team === p.team) continue;
+      if (!o.alive || o.team === p.team || !o.spotted) continue;
       const dx = o.tank.x - me.x, dz = o.tank.z - me.z;
       const d = Math.hypot(dx, dz);
       if (d < nearestD) { nearestD = d; nearest = o; }
