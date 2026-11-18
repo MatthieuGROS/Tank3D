@@ -4,6 +4,10 @@ import * as THREE from 'three';
 import { TEAM_INFO } from '/shared/constants.js';
 import { propBuilders } from './props.js';
 import { heightAt } from '/shared/map.js';
+import { stdMat, groundMat, texMat } from '../gfx.js';
+import { buildPine, pineMaterials } from './trees.js';
+import { GLB } from './glb.js';
+import { Q } from '../quality.js';
 
 // Petit générateur pseudo-aléatoire déterministe : tout le monde voit le même décor.
 function rng(seed) {
@@ -46,7 +50,14 @@ export function createMapModel(map) {
   const theme = THEMES[map.theme] ?? THEMES.meadow;
   const group = new THREE.Group();
   const rand = rng(1234);
-  const mat = (color, extra) => new THREE.MeshLambertMaterial({ color, flatShading: true, ...extra });
+  // matériau de base : béton granuleux (normales + rugosité réelles) teinté ; l'eau reste lisse
+  const mat = (color, extra) => (extra?.transparent
+    ? stdMat(color, { roughness: 0.12, metalness: 0.1, ...extra }, { strength: 0 })
+    : texMat('concrete', { color, tile: 2.2, normal: 0.55, ...extra }, { scale: 0.9, strength: 0.7, bump: 0 }));
+  // sol : texture dominante + plaques de terre / boue (terrain de guerre labouré par les chars)
+  const GROUND = { meadow: ['grass', 'mud'], desert: ['sand', 'crack'], dusk: ['sand', 'burnt'], snow: ['snow', 'mud'], blizzard: ['snow', 'mud'] };
+  const [groundA, groundB] = GROUND[map.theme] ?? GROUND.meadow;
+  const SLAB = { meadow: 'dirt', desert: 'sand', dusk: 'crack', snow: 'snow', blizzard: 'snow' }; // sol de l'arène
   const add = (geo, material, x, y, z, shadow = true) => {
     const m = new THREE.Mesh(geo, material);
     m.position.set(x, y, z);
@@ -69,7 +80,7 @@ export function createMapModel(map) {
   }
   groundGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   // carte à relief : le grand plan passe sous le maillage de l'arène (sinon les deux se disputent l'affichage)
-  add(groundGeo, new THREE.MeshLambertMaterial({ vertexColors: true }), 0, hills ? -0.08 : 0, 0, false);
+  add(groundGeo, groundMat(groundA, groundB, 6), 0, hills ? -0.08 : 0, 0, false);
 
   if (hills) {
     // Relief : l'arène est un maillage fin dont la hauteur suit heightAt (les collisions et les obus lisent la même fonction)
@@ -87,15 +98,15 @@ export function createMapModel(map) {
     }
     geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
     geo.computeVertexNormals();
-    const terrain = add(geo, new THREE.MeshLambertMaterial({ vertexColors: true }), 0, 0, 0, false);
+    const terrain = add(geo, groundMat(groundA, groundB, 6), 0, 0, 0, false);
     terrain.receiveShadow = true;
   } else {
     // Dalle de terre battue sur l'arène
-    add(new THREE.BoxGeometry(map.halfX * 2, 0.06, map.halfZ * 2), mat(theme.slab), 0, 0.0, 0, false);
+    add(new THREE.BoxGeometry(map.halfX * 2, 0.06, map.halfZ * 2), texMat(SLAB[map.theme] ?? 'dirt', { color: map.theme === 'meadow' ? 0xe8e0d4 : 0xf2eee6, tile: 5, normal: 1 }), 0, 0.0, 0, false);
   }
 
   // Murs d'enceinte
-  const wallMat = mat(0x8a8f93);
+  const wallMat = texMat('blocks', { color: 0xb8bcbf, tile: 3.2, normal: 1 });
   const t = 1.2, h = map.wallHeight;
   for (const s of [-1, 1]) {
     add(new THREE.BoxGeometry(map.halfX * 2 + t * 2, h, t), wallMat, 0, h / 2, s * (map.halfZ + t / 2));
@@ -103,8 +114,21 @@ export function createMapModel(map) {
   }
 
   // Obstacles rectangulaires
-  const snowMat = mat(0xf4f8fb);
-  const roofMat = mat(0x6a4a3c), concreteMat = mat(0x9a9d9f), trimMat = mat(0x55595c);
+  const snowMat = texMat('snow', { color: 0xf4f8fb, tile: 3 });
+  const roofMat = texMat('roof', { color: 0xc9b3a6, tile: 2.5, normal: 1, metalness: 0.5 });
+  const concreteMat = texMat('concrete', { color: 0xb4b6b4, tile: 3, normal: 1 });
+  const trimMat = mat(0x55595c);
+  // conteneurs : tôle peinte rouillée
+  const crates = [];
+  const crateMat = (i) => (crates[i % 2] ??= texMat('rust', { color: i % 2 ? 0xd4e4de : 0xffffff, tile: 2.6, normal: 1, metalness: 0.55 }));
+
+  // façades : plâtre éclaté et brique cassée en alternance (un matériau par style, partagé)
+  const facade = {};
+  const facadeMat = (i) => {
+    const brick = i % 3 === 1, key = brick ? 'brick' : `plaster${i % 2}`;
+    return (facade[key] ??= brick ? texMat('brick', { color: 0xd9c8c0, tile: 4, normal: 1.1 })
+      : texMat(i % 2 ? 'plaster2' : 'plaster', { color: BUILDING_COLORS[i % BUILDING_COLORS.length], tile: 4.5, normal: 1.1 }));
+  };
   const PROPS = propBuilders({ theme, group, mat, add, snowMat, concreteMat, trimMat });
   // éléments à plat (routes, ponts) : posés en premier, ils ne bloquent rien
   for (const f of map.flats ?? []) PROPS[f.kind]?.(f);
@@ -115,7 +139,7 @@ export function createMapModel(map) {
   map.boxes.forEach((b, i) => {
     const from = group.children.length;
     if (b.kind === 'building') {
-      add(new THREE.BoxGeometry(b.w, b.h, b.d), mat(BUILDING_COLORS[i % BUILDING_COLORS.length]), b.x, b.h / 2, b.z);
+      add(new THREE.BoxGeometry(b.w, b.h, b.d), facadeMat(i), b.x, b.h / 2, b.z);
       add(new THREE.BoxGeometry(b.w + 0.8, 0.4, b.d + 0.8), theme.snowy ? snowMat : roofMat, b.x, b.h + 0.2, b.z);
       add(new THREE.BoxGeometry(1.6, 1, 1.6), trimMat, b.x + b.w / 4, b.h + 0.9, b.z - b.d / 5);
       add(new THREE.BoxGeometry(b.w + 0.3, 0.5, b.d + 0.3), trimMat, b.x, 0.25, b.z);
@@ -125,7 +149,7 @@ export function createMapModel(map) {
     } else if (PROPS[b.kind]) {
       PROPS[b.kind](b, i);
     } else {
-      add(new THREE.BoxGeometry(b.w, b.h, b.d), mat(CRATE_COLORS[i % CRATE_COLORS.length]), b.x, b.h / 2, b.z);
+      add(new THREE.BoxGeometry(b.w, b.h, b.d), crateMat(i), b.x, b.h / 2, b.z);
       add(new THREE.BoxGeometry(b.w + 0.15, 0.25, b.d + 0.15), trimMat, b.x, b.h - 0.12, b.z);
       add(new THREE.BoxGeometry(b.w + 0.15, 0.25, b.d + 0.15), trimMat, b.x, 0.12, b.z);
     }
@@ -133,8 +157,10 @@ export function createMapModel(map) {
   });
 
   // Rochers et arbres
-  const rockMat = mat(theme.rock), trunkMat = mat(0x6b4a2e), leafMat = mat(theme.leaf[0]), leafMat2 = mat(theme.leaf[1]);
+  const rockMat = texMat('rock', { color: new THREE.Color(theme.rock).lerp(new THREE.Color(0xffffff), 0.5).getHex(), tile: 2.4, normal: 1.3 }), trunkMat = mat(0x6b4a2e), leafMat = mat(theme.leaf[0]), leafMat2 = mat(theme.leaf[1]);
   const duneMat = mat(theme.dune ?? 0xd6b679);
+  const pineMats = pineMaterials(theme);
+  const boulder = Q.s.detail && GLB.boulder ? GLB.boulder.getObjectByProperty('isMesh', true) : null; // rocher photoscanné (réglage « Détail des surfaces »)
   map.circles.forEach((o, i) => {
     const from = group.children.length;
     if (o.kind === 'dune') {
@@ -143,6 +169,13 @@ export function createMapModel(map) {
       geo.scale(1, o.h / o.r, 1);
       const m = add(geo, duneMat, o.x, 0, o.z);
       m.rotation.y = rand() * 6;
+    } else if (o.kind === 'rock' && boulder) {
+      const r2 = rng(Math.round(o.x * 31 + o.z * 17 + 999));
+      const k = (o.r * 2.1) / 1.83;
+      const m = add(boulder.geometry, boulder.material, o.x, -0.07 * k, o.z);
+      m.scale.set(k * (0.9 + r2() * 0.25), k * (0.85 + r2() * 0.3), k * (0.9 + r2() * 0.25));
+      m.rotation.set((r2() - 0.5) * 0.25, r2() * 6.28, (r2() - 0.5) * 0.25);
+      if (theme.snowy) add(new THREE.SphereGeometry(o.r * 0.8, 7, 3, 0, Math.PI * 2, 0, Math.PI / 3), snowMat, o.x, o.r * 0.7, o.z, false);
     } else if (o.kind === 'rock') {
       const geo = new THREE.IcosahedronGeometry(o.r * 1.08, 0);
       const pos = geo.attributes.position;
@@ -163,28 +196,23 @@ export function createMapModel(map) {
       PROPS[o.kind](o);
     } else {
       // feuillage au-dessus des chars : seul le tronc bloque
-      add(new THREE.CylinderGeometry(0.35, 0.55, 3.8, 6), trunkMat, o.x, 1.9, o.z);
-      add(new THREE.ConeGeometry(2.5, 3.6, 7), leafMat, o.x, 5.3, o.z);
-      add(new THREE.ConeGeometry(1.8, 3.0, 7), leafMat2, o.x, 7.3, o.z);
-      if (theme.snowy) add(new THREE.ConeGeometry(1.0, 1.4, 7), snowMat, o.x, 8.4, o.z, false);
+      const r3 = rng(Math.round(o.x * 31 + o.z * 17 + 555));
+      buildPine(add, pineMats, o.x, o.z, r3, 7.5 + r3() * 2.5);
     }
     track(`c${i}`, from);
   });
 
   // Décor lointain (hors arène, purement visuel)
   const hillMat = mat(theme.hill), farTree = mat(theme.farTree);
-  for (let i = 0; i < 26; i++) {
-    const a = (i / 26) * Math.PI * 2 + rand() * 0.2;
-    const d = Math.max(map.halfX, map.halfZ) + 70 + rand() * 90;
-    const s = 18 + rand() * 30;
-    add(new THREE.ConeGeometry(s, s * (0.5 + rand() * 0.4), 6), hillMat, Math.cos(a) * d, s * 0.2, Math.sin(a) * d, false);
-  }
-  for (let i = 0; i < 60; i++) {
+  // chaîne de montagnes : relief fractal (bruit « crêtes »), texture du sol puis roche, neige au sommet
+  add(mountainGeo(map, theme, rand), groundMat(groundA, groundB, 14), 0, 0, 0, false);
+  const farPineMats = pineMats;
+  for (let i = 0; i < 70; i++) {
     const a = rand() * Math.PI * 2;
     const d = Math.max(map.halfX, map.halfZ) + 25 + rand() * 60;
     const x = Math.cos(a) * d * 1.15, z = Math.sin(a) * d;
     if (Math.abs(x) < map.halfX + 5 && Math.abs(z) < map.halfZ + 5) continue;
-    add(new THREE.ConeGeometry(2.4, 7, 6), farTree, x, 3.5, z, false);
+    buildPine(add, farPineMats, x, z, rand, 8 + rand() * 4).forEach((m) => { m.castShadow = false; });
   }
 
   // Zone de capture (ou d'extraction / à tenir en campagne) : absente sur certaines missions
@@ -195,7 +223,7 @@ export function createMapModel(map) {
   const ringMat = new THREE.MeshBasicMaterial({ color: neutral, transparent: true, opacity: 0.9, side: THREE.DoubleSide });
   const discMat = new THREE.MeshBasicMaterial({ color: neutral, transparent: true, opacity: 0.08, depthWrite: false });
   const haloMat = new THREE.MeshBasicMaterial({ color: neutral, transparent: true, opacity: 0.1, side: THREE.DoubleSide, depthWrite: false });
-  const beaconMat = new THREE.MeshLambertMaterial({ color: neutral, emissive: neutral, emissiveIntensity: 0.5, flatShading: true });
+  const beaconMat = new THREE.MeshStandardMaterial({ color: neutral, emissive: neutral, emissiveIntensity: 0.9, roughness: 0.4, metalness: 0.2, flatShading: true });
   const ring = new THREE.Mesh(new THREE.RingGeometry(z.r - 0.35, z.r, 48).rotateX(-Math.PI / 2), ringMat);
   ring.position.set(z.x, gz + 0.08, z.z);
   const disc = new THREE.Mesh(new THREE.CircleGeometry(z.r - 0.35, 48).rotateX(-Math.PI / 2), discMat);
@@ -224,11 +252,43 @@ export function createMapModel(map) {
   return { group, objects, bushes, zone };
 }
 
+// Relief lointain : anneau de montagnes autour de l'arène (plat au centre, sous le sol de la carte).
+function mountainGeo(map, theme, rand) {
+  const SIZE = 1500, SEG = 130;
+  const geo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG).rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position, cols = [];
+  const seed = Math.floor(rand() * 1e6);
+  const hash = (x, y) => { let h = (x * 374761393 + y * 668265263 + seed) | 0; h = (h ^ (h >>> 13)) * 1274126177; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+  const vnoise = (x, y) => {
+    const xi = Math.floor(x), yi = Math.floor(y), fx = x - xi, fy = y - yi, sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+    return (hash(xi, yi) * (1 - sx) + hash(xi + 1, yi) * sx) * (1 - sy) + (hash(xi, yi + 1) * (1 - sx) + hash(xi + 1, yi + 1) * sx) * sy;
+  };
+  const ridged = (x, y) => { let a = 0.5, f = 1, sum = 0; for (let o = 0; o < 5; o++) { sum += a * (1 - Math.abs(2 * vnoise(x * f, y * f) - 1)); a *= 0.5; f *= 2.1; } return sum; };
+  const sm = (a, b, v) => { const t = Math.min(1, Math.max(0, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const c = new THREE.Color(), base = new THREE.Color(), rockC = new THREE.Color(0x7d7a72), snowC = new THREE.Color(0xf2f5f8);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    const d = Math.hypot(Math.max(Math.abs(x) - map.halfX, 0), Math.max(Math.abs(z) - map.halfZ, 0));
+    const rise = Math.pow(sm(120, 380, d), 1.15);
+    const n = ridged(x * 0.0035, z * 0.0035);
+    const h = -0.6 + rise * (8 + n * 120) + sm(60, 200, d) * vnoise(x * 0.02, z * 0.02) * 4; // sous le sol près de l'arène
+    pos.setY(i, h);
+    base.setHSL(theme.ground[0], theme.ground[1], theme.ground[2] * 0.95 + vnoise(x * 0.05, z * 0.05) * 0.06);
+    c.copy(base).lerp(rockC, sm(30, 75, h));
+    if (theme.snowy) c.lerp(snowC, sm(20, 50, h)); else c.lerp(snowC, sm(85, 110, h) * 0.6);
+    cols.push(c.r, c.g, c.b);
+  }
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
 // Buissons : touffes de feuillage sans collision (shared/props.js : bush). Un char peut s'y cacher ;
 // les touffes proches d'un char bougent un peu pour que le buisson ne paraisse pas figé.
 function buildBushes(map, theme, mat, group) {
   const blobs = [];
-  const leaf = [mat(theme.leaf[0]), mat(theme.leaf[1]), mat(0x4a8a40)];
+  const pm = pineMaterials(theme);
+  const leaf = [pm.leafA, pm.leafB, pm.leafA]; // mêmes aiguilles que les arbres : feuillage dense et touffu
   const geo = new THREE.IcosahedronGeometry(1, 1);
   const r = rng(4242); // générateur à part : ne décale pas le décor tiré avec `rand`
   for (const f of map.flats ?? []) {

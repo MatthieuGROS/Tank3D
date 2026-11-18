@@ -8,6 +8,7 @@ import { MISSIONS, CHAPTERS, getMission } from '/shared/campaign.js';
 import { pointHitsTank, shellHeight, autoPitch } from '/shared/tank.js';
 import { SKINS, DEFAULT_SKIN, skinUnlocked, unlockedSkins } from '/shared/skins.js';
 import { Net } from './net.js';
+import { Q } from './quality.js';
 import { Input } from './input.js';
 import { Game } from './game.js';
 import { Renderer } from './renderer.js';
@@ -1345,8 +1346,10 @@ let lastPhase = 'lobby';
 
 function frame(now) {
   requestAnimationFrame(frame);
+  if (!Q.shouldRun(now)) return; // limiteur de FPS (panneau Graphismes)
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
+  Q.measure(dt);
   time += dt;
 
   // 1. Simulation à pas fixe (60 Hz) : envoi des commandes + prédiction de mon char

@@ -2,12 +2,13 @@
 // usine et les trois boss. Même hiérarchie que les chars (group > body > turret > barrel),
 // mêmes outils (models/tank.js). Les unités fixes n'ont pas de chenilles (`static`).
 import * as THREE from 'three';
+import { stdMat } from '../gfx.js';
 import { profile, plan, cylX, cylZ, kit, roadWheel, finish } from './tank.js';
 
 const STATIC_FIELDS = { wheelRadius: 1, trackX: 0, rearZ: 0, static: true };
 
 function concreteMats(mats) {
-  const m = (color) => new THREE.MeshLambertMaterial({ color, flatShading: true });
+  const m = (color) => stdMat(color, { roughness: 0.78, metalness: 0.12, flatShading: true }, { scale: 1.1, strength: 0.9, bump: 0.003 });
   mats.concrete = m(0x9a9a92);
   mats.concrete2 = m(0x7c7d77);
   mats.sand = m(0xb59f6e);
@@ -103,7 +104,7 @@ function buildMortar(teamColor) {
 function buildDepot(teamColor) {
   const { mats, add } = kit(teamColor);
   concreteMats(mats);
-  mats.hazard = new THREE.MeshLambertMaterial({ color: 0xf5b312, flatShading: true });
+  mats.hazard = stdMat(0xf5b312, { roughness: 0.6, metalness: 0.1, flatShading: true });
   const group = new THREE.Group();
   const body = new THREE.Group();
   group.add(body);
@@ -129,7 +130,7 @@ function buildGenerator(teamColor) {
   const { mats, add } = kit(teamColor);
   concreteMats(mats);
   // les bobines bleues font office de « lampe » : elles s'éteignent quand le générateur saute
-  mats.lamp = new THREE.MeshLambertMaterial({ color: 0x8fd8ff, emissive: 0x4fb4ff, emissiveIntensity: 1.2, flatShading: true });
+  mats.lamp = new THREE.MeshStandardMaterial({ color: 0x8fd8ff, emissive: 0x4fb4ff, emissiveIntensity: 1.6, roughness: 0.3, flatShading: true });
   const glow = mats.lamp;
   const group = new THREE.Group();
   const body = new THREE.Group();

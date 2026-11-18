@@ -15,6 +15,7 @@ const PORT = Number(process.env.PORT) || DEFAULT_PORT;
 const MOUNTS = [
   ['/shared/', path.join(ROOT, 'shared')],
   ['/vendor/three/', path.join(ROOT, 'node_modules', 'three', 'build')],
+  ['/vendor/three-addons/', path.join(ROOT, 'node_modules', 'three', 'examples', 'jsm')], // post-traitement (bloom…)
   ['/', path.join(ROOT, 'client')],
 ];
 const MIME = {
@@ -23,6 +24,10 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.gltf': 'model/gltf+json',
+  '.bin': 'application/octet-stream',
+  '.glb': 'model/gltf-binary',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
 };
@@ -47,7 +52,8 @@ function serveStatic(req, res) {
       }
       res.writeHead(200, {
         'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-        'Cache-Control': 'no-cache',
+        // textures et modèles pèsent lourd et ne changent pas : le navigateur les garde 1 h
+        'Cache-Control': /^\/(textures|models)\//.test(urlPath) ? 'public, max-age=3600' : 'no-cache',
       });
       res.end(data);
     });

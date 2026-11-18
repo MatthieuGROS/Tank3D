@@ -7,6 +7,68 @@ import { lerpAngle, angleDiff, clamp } from '/shared/tank.js';
 import { SKINS, DEFAULT_SKIN } from '/shared/skins.js';
 import { createTankModel, SKIN_TIME } from './models/tank.js';
 import { createMapModel, THEMES } from './models/map.js';
+import { Q } from './quality.js';
+import { DETAIL } from './gfx.js';
+import { EffectComposer } from '/vendor/three-addons/postprocessing/EffectComposer.js';
+import { RenderPass } from '/vendor/three-addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from '/vendor/three-addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from '/vendor/three-addons/postprocessing/OutputPass.js';
+import { GTAOPass } from '/vendor/three-addons/postprocessing/GTAOPass.js';
+import { ShaderPass } from '/vendor/three-addons/postprocessing/ShaderPass.js';
+
+// Étalonnage « cinéma » (en HDR, avant le tone mapping) : contraste, teinte chaude des lumières / froide des ombres,
+// vignettage et grain fin.
+const GradeShader = {
+  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uAmount: { value: 1 } },
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float uTime, uAmount; varying vec2 vUv;
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233)) + uTime) * 43758.5453); }
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+      vec3 warm = vec3(1.06, 1.0, 0.92), cool = vec3(0.92, 0.98, 1.08);
+      vec3 col = c.rgb * mix(cool, warm, smoothstep(0.05, 0.9, l));
+      col = mix(vec3(l), col, 1.08);                                   // saturation
+      col = (col - 0.18) * 1.12 + 0.18;                                // contraste autour du gris moyen
+      float v = smoothstep(1.05, 0.35, length(vUv - 0.5) * 1.35);
+      col *= mix(1.0, v, 0.55 * uAmount);                              // vignettage
+      col += (hash(vUv * 1000.0) - 0.5) * 0.025 * uAmount;             // grain
+      gl_FragColor = vec4(max(col, 0.0), c.a);
+    }`,
+};
+
+// Couleur du haut du ciel selon l'ambiance (l'horizon prend la couleur du brouillard)
+const ZENITH = { meadow: 0x3f7cc4, desert: 0x5f9bd0, dusk: 0x3b4678, snow: 0x7fa6cf, blizzard: 0x8b98a4 };
+
+// Dôme de ciel : dégradé horizon -> zénith, halo et disque du soleil. Les valeurs > 1 (soleil) alimentent le bloom et les reflets.
+function makeSkyMaterial(horizon, zenith, sunDir, sunColor) {
+  return new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
+    uniforms: {
+      uHorizon: { value: new THREE.Color(horizon) },
+      uZenith: { value: new THREE.Color(zenith) },
+      uSunDir: { value: sunDir.clone().normalize() },
+      uSunColor: { value: new THREE.Color(sunColor) },
+    },
+    vertexShader: 'varying vec3 vDir; void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position.z = gl_Position.w; }',
+    fragmentShader: `
+      varying vec3 vDir;
+      uniform vec3 uHorizon, uZenith, uSunDir, uSunColor;
+      void main() {
+        vec3 d = normalize(vDir);
+        float h = d.y;
+        vec3 col = mix(uHorizon, uZenith, pow(clamp(h, 0.0, 1.0), 0.55));
+        col = mix(col, uHorizon * 0.75, smoothstep(0.0, -0.3, h));
+        float s = max(dot(d, uSunDir), 0.0);
+        col += uSunColor * (smoothstep(0.9993, 0.9999, s) * 5.0 + pow(s, 60.0) * 0.5 + pow(s, 6.0) * 0.12);
+        col = mix(col, uHorizon, exp(-max(h, 0.0) * 9.0) * 0.55);
+        gl_FragColor = vec4(col, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  });
+}
 
 const SKY = 0xa9cbe6;
 const CAM_DIST = 12.5;
@@ -16,14 +78,21 @@ const FX_RANGE = 120; // au-delà, on n'émet plus de poussière / fumée
 
 export class Renderer {
   constructor(canvas) {
-    this.gl = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.gl.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.gl = new THREE.WebGLRenderer({ canvas, antialias: Q.s.aa, powerPreference: 'high-performance' });
     this.gl.shadowMap.enabled = true;
-    this.gl.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.gl.toneMapping = THREE.ACESFilmicToneMapping;
+    this.gl.toneMappingExposure = 1.0;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(SKY);
     this.scene.fog = new THREE.Fog(SKY, 110, 330);
+    this.pmrem = new THREE.PMREMGenerator(this.gl);
+    this.envCache = new Map();
+    this.theme = THEMES.meadow;
+    this.themeKey = 'meadow';
+    this.fogBase = [110, 330];
+    this.composer = null;
+    this.sky = null;
 
     this.camera = new THREE.PerspectiveCamera(58, 1, 0.3, 600);
     this.camYaw = 0;
@@ -52,14 +121,117 @@ export class Renderer {
     this.v = new THREE.Vector3();
     this.bubbleGeo = new THREE.IcosahedronGeometry(1, 2);
 
+    this.pr = 0;
+    this.shadowKey = '';
+    Q.onChange(() => this.applyQuality());
+    this.applyQuality();
     addEventListener('resize', () => this.resize());
     this.resize();
   }
 
   resize() {
+    const pr = this.pixelRatio();
+    this.pr = pr;
+    this.gl.setPixelRatio(pr);
     this.gl.setSize(innerWidth, innerHeight, false);
+    this.composer?.setPixelRatio(pr);
+    this.composer?.setSize(innerWidth, innerHeight);
     this.camera.aspect = innerWidth / innerHeight;
     this.camera.updateProjectionMatrix();
+  }
+
+  pixelRatio() {
+    return Math.max(0.4, Math.min(devicePixelRatio, 2) * Q.s.renderScale * Q.dynScale);
+  }
+
+  // Applique les réglages graphiques (au démarrage et à chaque changement dans le panneau).
+  applyQuality() {
+    const s = Q.s;
+    DETAIL.value = s.detail ? 1 : 0;
+
+    // ombres : taille de la carte et filtrage
+    const sun = this.sun;
+    sun.castShadow = s.shadows > 0;
+    const size = [512, 1024, 2048, 4096][s.shadows];
+    const type = s.shadows >= 3 ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    const key = `${size}:${type}`;
+    if (key !== this.shadowKey && s.shadows > 0) {
+      this.shadowKey = key;
+      sun.shadow.mapSize.set(size, size);
+      sun.shadow.map?.dispose();
+      sun.shadow.map = null;
+      if (this.gl.shadowMap.type !== type) {
+        this.gl.shadowMap.type = type;
+        this.scene.traverse((o) => { if (o.material) [].concat(o.material).forEach((m) => { m.needsUpdate = true; }); });
+      }
+    }
+
+    // reflets du ciel
+    this.scene.environment = s.reflections ? this.envCache.get(this.themeKey) ?? null : null;
+    this.hemi.intensity = this.theme.hemi[2] * (s.reflections ? 0.5 : 1);
+
+    // distance d'affichage
+    this.scene.fog.near = this.fogBase[0] * s.viewDist;
+    this.scene.fog.far = this.fogBase[1] * s.viewDist * (this.fogBase[1] > 250 ? 1.45 : 1); // brume plus lointaine : les montagnes restent lisibles
+    this.camera.far = Math.max(300, 600 * s.viewDist);
+    this.camera.updateProjectionMatrix();
+
+    // bloom : passe par un compositeur (rendu en demi-flottant, MSAA 4x si activé)
+    const post = s.bloom || s.ao || s.grade;
+    const postKey = `${s.bloom}${s.ao}${s.grade}${s.aa}`;
+    if (this.composer && (!post || postKey !== this.postKey)) {
+      this.composer.dispose();
+      this.composer = null;
+    }
+    if (post && !this.composer) {
+      this.postKey = postKey;
+      const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: s.aa ? 4 : 0 });
+      this.composer = new EffectComposer(this.gl, rt);
+      this.composer.addPass(new RenderPass(this.scene, this.camera));
+      if (s.ao) {
+        // occlusion ambiante : assombrit les creux (dessous des chars, pieds de murs, coins)
+        const gtao = new GTAOPass(this.scene, this.camera, innerWidth, innerHeight);
+        gtao.output = GTAOPass.OUTPUT.Default;
+        gtao.updateGtaoMaterial({ radius: 1.6, distanceExponent: 1.5, thickness: 2, scale: 1.1, samples: 12 });
+        this.composer.addPass(gtao);
+      }
+      if (s.bloom) {
+        this.bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.55, 1.1);
+        this.composer.addPass(this.bloomPass);
+      }
+      if (s.grade) {
+        this.gradePass = new ShaderPass(GradeShader);
+        this.composer.addPass(this.gradePass);
+      } else this.gradePass = null;
+      this.composer.addPass(new OutputPass());
+    }
+    this.resize();
+  }
+
+  // Ciel + carte d'environnement (reflets) d'une ambiance, mis en cache.
+  setSky(themeKey) {
+    const theme = THEMES[themeKey] ?? THEMES.meadow;
+    this.theme = theme;
+    this.themeKey = themeKey;
+    const zenith = ZENITH[themeKey] ?? ZENITH.meadow;
+    const sunDir = this.sun.position.clone().normalize();
+    const sunCol = new THREE.Color(theme.sun[0]);
+    if (this.sky) { this.scene.remove(this.sky); this.sky.geometry.dispose(); this.sky.material.dispose(); }
+    this.sky = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), makeSkyMaterial(theme.sky, zenith, sunDir, sunCol));
+    this.sky.scale.setScalar(450);
+    this.sky.renderOrder = -1000;
+    this.sky.frustumCulled = false;
+    this.scene.add(this.sky);
+    this.scene.background = null;
+    if (!this.envCache.has(themeKey)) {
+      const envScene = new THREE.Scene();
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), makeSkyMaterial(theme.sky, zenith, sunDir, sunCol));
+      dome.scale.setScalar(50);
+      envScene.add(dome);
+      this.envCache.set(themeKey, this.pmrem.fromScene(envScene, 0.02).texture);
+      dome.geometry.dispose();
+      dome.material.dispose();
+    }
   }
 
   // Change de carte : on reconstruit tout le décor à partir des données.
@@ -79,14 +251,14 @@ export class Renderer {
     this.sun.target.position.set(0, 0, 0);
     // ambiance de la carte : ciel, brouillard, lumière
     const theme = THEMES[map.theme] ?? THEMES.meadow;
-    this.scene.background.set(theme.sky);
+    this.fogBase = theme.fog;
     this.scene.fog.color.set(theme.sky);
-    [this.scene.fog.near, this.scene.fog.far] = theme.fog;
     this.hemi.color.set(theme.hemi[0]);
     this.hemi.groundColor.set(theme.hemi[1]);
-    this.hemi.intensity = theme.hemi[2];
     this.sun.color.set(theme.sun[0]);
     this.sun.intensity = theme.sun[1];
+    this.setSky(THEMES[map.theme] ? map.theme : 'meadow');
+    this.applyQuality();
     for (const pk of this.pickups.values()) this.scene.remove(pk.group);
     this.pickups.clear();
     this.mapModel = createMapModel(map);
@@ -424,6 +596,11 @@ export class Renderer {
   }
 
   render() {
-    this.gl.render(this.scene, this.camera);
+    this.sky?.position.copy(this.camera.position);
+    // résolution dynamique : on ne touche à la taille que si elle a vraiment changé
+    if (Math.abs(this.pixelRatio() - this.pr) > 0.04) this.resize();
+    if (this.gradePass) this.gradePass.uniforms.uTime.value = (performance.now() % 1000) / 1000;
+    if (this.composer) this.composer.render();
+    else this.gl.render(this.scene, this.camera);
   }
 }

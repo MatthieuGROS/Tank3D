@@ -1,0 +1,13 @@
+heavy_tank00.glb : "Heavy Tank [extra low poly, RTS]" par 32kda
+Source : https://opengameart.org/content/heavy-tankextra-low-poly-rts
+Licence : CC0 (domaine public) - http://creativecommons.org/publicdomain/zero/1.0/
+
+reconTank.obj : "Recon Tank" par MNDV.ecb (eric buisson), 2018
+Source : https://opengameart.org/content/recon-tank
+Licence : CC-BY 4.0 ou CC0 (double licence). Attribution : 2018 eric buisson.
+
+Poly Haven (https://polyhaven.com) - CC0, domaine public :
+ - textures/*.jpg : grass_ground, brown_mud_dry, coast_sand_01, dry_ground_01, burned_ground_01, snow_02, dirt,
+   damaged_plaster, rough_plaster_broken, broken_brick_wall, rough_concrete, concrete_block_wall,
+   rusty_corrugated_iron, rusty_painted_metal, pine_bark, mossy_rock (1K : diffuse / normal GL / roughness)
+ - models/ph/boulder_01  (modèle 3D)

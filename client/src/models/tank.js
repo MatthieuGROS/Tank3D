@@ -10,6 +10,12 @@
 // fanion d'antenne) prennent la couleur de l'équipe `idColor`, pour reconnaître allié et ennemi.
 import * as THREE from 'three';
 import { UNIT_MODELS } from './units.js';
+import { GLB } from './glb.js';
+import { stdMat, addDetail } from '../gfx.js';
+import { RoundedBoxGeometry } from '/vendor/three-addons/geometries/RoundedBoxGeometry.js';
+
+// Boîte aux arêtes chanfreinées : les bords accrochent la lumière comme de la vraie tôle.
+const box = (w, h, d) => new RoundedBoxGeometry(w, h, d, 2, Math.min(0.045, Math.min(w, h, d) * 0.3));
 
 const WRECK_COLOR = 0x26221f;
 
@@ -36,8 +42,8 @@ function plan(points, height, bevel = 0) {
   return geo;
 }
 
-const cylX = (r1, r2, len, seg) => new THREE.CylinderGeometry(r1, r2, len, seg).rotateZ(Math.PI / 2); // axe X
-const cylZ = (r1, r2, len, seg) => new THREE.CylinderGeometry(r1, r2, len, seg).rotateX(Math.PI / 2); // axe Z (r1 vers l'avant)
+const cylX = (r1, r2, len, seg) => new THREE.CylinderGeometry(r1, r2, len, seg * 2).rotateZ(Math.PI / 2); // axe X
+const cylZ = (r1, r2, len, seg) => new THREE.CylinderGeometry(r1, r2, len, seg * 2).rotateX(Math.PI / 2); // axe Z (r1 vers l'avant)
 
 const STRIPE_COLOR = 0xe9e4d2;
 
@@ -122,8 +128,8 @@ function skinMaterial(skin, shade) {
   const camo = skin.camo, fili = skin.filigree;
   const baseColor = new THREE.Color(camo ? camo.colors[0] : skin.hull).multiplyScalar(shade);
   const m = skin.gloss
-    ? new THREE.MeshPhongMaterial({ color: baseColor, flatShading: true, shininess: skin.gloss, specular: 0x5a5a5a })
-    : new THREE.MeshLambertMaterial({ color: baseColor, flatShading: true });
+    ? new THREE.MeshPhysicalMaterial({ color: baseColor, flatShading: true, roughness: Math.max(0.12, 0.6 - skin.gloss / 140), metalness: 0.35, clearcoat: 0.8, clearcoatRoughness: 0.12 })
+    : new THREE.MeshStandardMaterial({ color: baseColor, flatShading: true, roughness: 0.62, metalness: 0.28 });
   const uniforms = { uSkinOn: { value: 1 }, uTime: SKIN_TIME };
   if (camo) {
     uniforms.uCamoScale = { value: 1 / (camo.scale ?? 1) };
@@ -157,6 +163,7 @@ function skinMaterial(skin, shade) {
     sh.fragmentShader = defines + SKIN_GLSL + frag;
   };
   m.customProgramCacheKey = () => `skin:${!!camo}:${!!fili}:${!!skin.gloss}`;
+  addDetail(m, { scale: 1.4, strength: skin.gloss ? 0.35 : 0.8, bump: skin.gloss ? 0 : 0.003 });
   return m;
 }
 
@@ -165,15 +172,16 @@ function skinMaterial(skin, shade) {
 function partMaterial(mat, part, fallback) {
   if (!part) return mat(fallback);
   if (!part.gloss) return mat(part.color, part.glow ? { emissive: part.color, emissiveIntensity: part.glow } : undefined);
-  return new THREE.MeshPhongMaterial({
-    color: part.color, flatShading: true, shininess: part.gloss, specular: part.specular ?? 0x777777,
+  return new THREE.MeshStandardMaterial({
+    color: part.color, roughness: Math.max(0.1, 0.7 - part.gloss / 120), metalness: 0.75,
     emissive: part.color, emissiveIntensity: part.glow ?? 0,
   });
 }
 
 // Matériaux aux couleurs de l'équipe (ou du skin) + aide pour poser des pièces.
 function kit(teamColor, { skin = null, idColor = null } = {}) {
-  const mat = (color, extra) => new THREE.MeshLambertMaterial({ color, flatShading: true, ...extra });
+  // peinture militaire : mate, légèrement métallique, avec usure et poussière (gfx.js)
+  const mat = (color, extra) => stdMat(color, { roughness: 0.66, metalness: 0.22, flatShading: true, ...extra }, { scale: 1.5, strength: 0.85, bump: 0.003 });
   const base = new THREE.Color(skin?.hull ?? teamColor);
   // marques d'identification : couleur d'équipe légèrement lumineuse (lisible de loin,
   // au crépuscule, dans le blizzard). Sur la peinture d'équipe, la caisse suffit : bandes claires.
@@ -185,17 +193,17 @@ function kit(teamColor, { skin = null, idColor = null } = {}) {
     dark: mat(skin?.dark ?? base.clone().multiplyScalar(0.5)),
     stripe: painted ? mat(id, { emissive: id, emissiveIntensity: 0.3 }) : mat(STRIPE_COLOR),
     flag: mat(idColor ?? STRIPE_COLOR, { side: THREE.DoubleSide, emissive: idColor ?? 0, emissiveIntensity: idColor != null ? 0.35 : 0 }),
-    track: partMaterial(mat, skin?.parts?.track, 0x2a2c2e),
-    wheel: partMaterial(mat, skin?.parts?.wheel, 0x60666b),
-    metal: partMaterial(mat, skin?.parts?.metal, 0x3b4046),
-    lamp: mat(skin?.parts?.lamp ?? 0xfff3c4, { emissive: skin?.parts?.lamp ?? 0xffe9a0, emissiveIntensity: 0.9 }),
-    canvas: partMaterial(mat, skin?.parts?.canvas, 0x6b6448), // bâches, sacs, filets
+    track: skin?.parts?.track ? partMaterial(mat, skin.parts.track, 0x2a2c2e) : addDetail(new THREE.MeshStandardMaterial({ color: 0x2a2c2e, roughness: 0.88, metalness: 0.5, flatShading: true }), { scale: 2.2, strength: 0.9, bump: 0.02, kind: 'track' }),
+    wheel: skin?.parts?.wheel ? partMaterial(mat, skin.parts.wheel, 0x60666b) : mat(0x4a4f52, { roughness: 0.82, metalness: 0.3, flatShading: false }),
+    metal: skin?.parts?.metal ? partMaterial(mat, skin.parts.metal, 0x3b4046) : stdMat(0x3b4046, { roughness: 0.38, metalness: 0.9 }, { scale: 2.5, strength: 0.6, bump: 0.0015, dustAmt: 0.15 }),
+    lamp: new THREE.MeshStandardMaterial({ color: skin?.parts?.lamp ?? 0xfff3c4, emissive: skin?.parts?.lamp ?? 0xffe9a0, emissiveIntensity: 1.6, roughness: 0.15, metalness: 0 }),
+    canvas: skin?.parts?.canvas ? partMaterial(mat, skin.parts.canvas, 0x6b6448) : mat(0x6b6448, { roughness: 1, metalness: 0, flatShading: false }), // bâches, sacs, filets
   };
   if (skin?.emblem) {
     const e = skin.emblem;
     const offset = { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 };
     mats.emblem = e.gloss
-      ? new THREE.MeshPhongMaterial({ color: e.color, flatShading: true, shininess: e.gloss, specular: 0xfff0c0, emissive: e.color, emissiveIntensity: e.glow ?? 0, ...offset })
+      ? new THREE.MeshStandardMaterial({ color: e.color, roughness: 0.25, metalness: 0.9, emissive: e.color, emissiveIntensity: e.glow ?? 0, ...offset })
       : mat(e.color, offset);
     mats.emblem.userData.kind = skin.emblem.kind ?? 'star';
   }
@@ -366,7 +374,7 @@ function buildStandard(teamColor, look) {
   const wheels = [];
   const trackGeo = profile([[-2.5, 0.55], [-2.1, 0.02], [2.1, 0.02], [2.5, 0.55], [2.3, 0.95], [-2.3, 0.95]], 0.65);
   const wheelGeo = cylX(0.34, 0.34, 0.14, 8);
-  const hubGeo = new THREE.BoxGeometry(0.04, 0.5, 0.12);
+  const hubGeo = box(0.04, 0.5, 0.12);
   const sprocketGeo = cylX(0.25, 0.25, 0.14, 6);
   for (const side of [-1, 1]) {
     add(group, trackGeo, mats.track, side * 1.2, 0, 0);
@@ -378,16 +386,16 @@ function buildStandard(teamColor, look) {
   // Caisse (bascule à l'accélération, au freinage et au tir)
   const body = new THREE.Group();
   group.add(body);
-  add(body, new THREE.BoxGeometry(1.8, 0.6, 4.5), mats.dark, 0, 0.62, 0);
+  add(body, box(1.8, 0.6, 4.5), mats.dark, 0, 0.62, 0);
   add(body, profile([[-2.45, 0.92], [2.6, 0.92], [1.5, 1.5], [-2.15, 1.5]], 3.0), mats.hull);
   for (const side of [-1, 1]) {
-    add(body, new THREE.BoxGeometry(0.72, 0.08, 4.9), mats.dark, side * 1.22, 0.99, 0); // garde-boue
-    add(body, new THREE.BoxGeometry(0.22, 0.16, 0.1), mats.lamp, side * 1.0, 1.08, 2.36); // phare
+    add(body, box(0.72, 0.08, 4.9), mats.dark, side * 1.22, 0.99, 0); // garde-boue
+    add(body, box(0.22, 0.16, 0.1), mats.lamp, side * 1.0, 1.08, 2.36); // phare
     add(body, cylZ(0.1, 0.1, 0.5, 6), mats.metal, side * 0.9, 1.25, -2.45); // échappement
   }
-  add(body, new THREE.BoxGeometry(1.7, 0.1, 1.1), mats.dark, 0, 1.54, -1.45); // grille moteur
-  add(body, new THREE.BoxGeometry(0.5, 0.25, 0.7), mats.dark, 1.15, 1.6, 0.2); // caisse à outils
-  add(body, new THREE.BoxGeometry(3.02, 0.14, 0.3), mats.stripe, 0, 1.2, -1.9); // bande d'identification
+  add(body, box(1.7, 0.1, 1.1), mats.dark, 0, 1.54, -1.45); // grille moteur
+  add(body, box(0.5, 0.25, 0.7), mats.dark, 1.15, 1.6, 0.2); // caisse à outils
+  add(body, box(3.02, 0.14, 0.3), mats.stripe, 0, 1.2, -1.9); // bande d'identification
   emblems(add, mats, body, 1.5, 1.22, -0.35, 0.21);
 
   // Tourelle (tourne sur Y)
@@ -398,12 +406,12 @@ function buildStandard(teamColor, look) {
   const turretGeo = new THREE.CylinderGeometry(0.95, 1.25, 0.75, 8).rotateY(Math.PI / 8).scale(1, 1, 1.18);
   add(turret, turretGeo, mats.turret, 0, 0.375, 0);
   add(turret, new THREE.CylinderGeometry(1.2, 1.27, 0.1, 8).rotateY(Math.PI / 8).scale(1, 1, 1.18), mats.stripe, 0, 0.08, 0);
-  add(turret, new THREE.BoxGeometry(0.95, 0.5, 0.5), mats.dark, 0, 0.36, 1.25); // masque du canon
+  add(turret, box(0.95, 0.5, 0.5), mats.dark, 0, 0.36, 1.25); // masque du canon
   add(turret, new THREE.CylinderGeometry(0.32, 0.36, 0.12, 8), mats.dark, -0.35, 0.8, -0.3); // trappe
-  add(turret, new THREE.BoxGeometry(0.9, 0.3, 0.5), mats.dark, 0, 0.45, -1.35); // panier arrière
+  add(turret, box(0.9, 0.3, 0.5), mats.dark, 0, 0.45, -1.35); // panier arrière
   add(turret, new THREE.CylinderGeometry(0.02, 0.02, 1.5, 4), mats.metal, 0.65, 1.5, -0.9); // antenne
   pennant(add, mats, turret, 0.65, 2.25, -0.9);
-  add(turret, new THREE.BoxGeometry(0.1, 0.1, 0.7), mats.metal, 0.4, 0.88, 0.25); // mitrailleuse de toit
+  add(turret, box(0.1, 0.1, 0.7), mats.metal, 0.4, 0.88, 0.25); // mitrailleuse de toit
 
   // Canon (recule au tir)
   const barrel = new THREE.Group();
@@ -432,9 +440,9 @@ function buildHeavy(teamColor, look) {
   const wheels = [];
   const trackGeo = profile([[-3.0, 0.6], [-2.55, 0.02], [2.55, 0.02], [3.0, 0.6], [2.75, 1.02], [-2.75, 1.02]], 0.78);
   const wheelGeo = cylX(0.36, 0.36, 0.16, 8);
-  const hubGeo = new THREE.BoxGeometry(0.04, 0.54, 0.13);
+  const hubGeo = box(0.04, 0.54, 0.13);
   const sprocketGeo = cylX(0.29, 0.29, 0.16, 7);
-  const skirtGeo = new THREE.BoxGeometry(0.08, 0.5, 1.34);
+  const skirtGeo = box(0.08, 0.5, 1.34);
   for (const side of [-1, 1]) {
     add(group, trackGeo, mats.track, side * 1.38, 0, 0);
     for (let i = 0; i < 7; i++) wheels.push(roadWheel(add, mats, group, wheelGeo, hubGeo, side, 1.8, 0.42, -2.4 + i * 0.8));
@@ -446,23 +454,23 @@ function buildHeavy(teamColor, look) {
   // Caisse
   const body = new THREE.Group();
   group.add(body);
-  add(body, new THREE.BoxGeometry(2.1, 0.7, 5.5), mats.dark, 0, 0.68, 0);
+  add(body, box(2.1, 0.7, 5.5), mats.dark, 0, 0.68, 0);
   add(body, profile([[-2.9, 1.0], [3.05, 1.0], [1.75, 1.75], [-2.65, 1.75]], 3.5), mats.hull);
   add(body, profile([[1.8, 1.72], [2.95, 1.06], [3.08, 1.12], [1.95, 1.8]], 2.9), mats.dark); // surblindage du glacis
   for (const side of [-1, 1]) {
-    add(body, new THREE.BoxGeometry(0.62, 0.08, 6.1), mats.dark, side * 1.66, 1.06, 0); // garde-boue
-    add(body, new THREE.BoxGeometry(0.24, 0.18, 0.1), mats.lamp, side * 1.15, 1.32, 2.86); // phare
-    add(body, new THREE.BoxGeometry(0.34, 0.28, 0.08), mats.metal, side * 1.15, 1.32, 2.92).scale.set(1, 1, 0.4); // grille de phare
+    add(body, box(0.62, 0.08, 6.1), mats.dark, side * 1.66, 1.06, 0); // garde-boue
+    add(body, box(0.24, 0.18, 0.1), mats.lamp, side * 1.15, 1.32, 2.86); // phare
+    add(body, box(0.34, 0.28, 0.08), mats.metal, side * 1.15, 1.32, 2.92).scale.set(1, 1, 0.4); // grille de phare
     add(body, cylZ(0.12, 0.12, 0.55, 6), mats.metal, side * 1.1, 1.45, -2.9); // échappement
     add(body, cylX(0.24, 0.24, 0.66, 8), mats.dark, side * 0.52, 1.3, -3.05); // fût de carburant (plaque arrière)
-    add(body, new THREE.BoxGeometry(0.1, 0.12, 0.5), mats.metal, side * 1.45, 1.1, 3.0); // crochet de remorquage
+    add(body, box(0.1, 0.12, 0.5), mats.metal, side * 1.45, 1.1, 3.0); // crochet de remorquage
   }
-  for (let i = 0; i < 5; i++) add(body, new THREE.BoxGeometry(0.42, 0.08, 0.26), mats.track, -0.95 + i * 0.475, 1.5, 2.45).rotation.x = -0.52; // maillons de rechange
-  add(body, new THREE.BoxGeometry(2.4, 0.1, 1.5), mats.dark, 0, 1.79, -1.7); // grille moteur
-  for (let i = 0; i < 4; i++) add(body, new THREE.BoxGeometry(2.2, 0.06, 0.08), mats.metal, 0, 1.86, -2.25 + i * 0.36); // lames de la grille
-  add(body, new THREE.BoxGeometry(0.45, 0.2, 0.9), mats.dark, 1.45, 1.85, 0.0); // caisses à outils
-  add(body, new THREE.BoxGeometry(0.45, 0.2, 0.9), mats.dark, -1.45, 1.85, 0.0);
-  add(body, new THREE.BoxGeometry(3.52, 0.16, 0.34), mats.stripe, 0, 1.38, -2.3); // bande d'identification
+  for (let i = 0; i < 5; i++) add(body, box(0.42, 0.08, 0.26), mats.track, -0.95 + i * 0.475, 1.5, 2.45).rotation.x = -0.52; // maillons de rechange
+  add(body, box(2.4, 0.1, 1.5), mats.dark, 0, 1.79, -1.7); // grille moteur
+  for (let i = 0; i < 4; i++) add(body, box(2.2, 0.06, 0.08), mats.metal, 0, 1.86, -2.25 + i * 0.36); // lames de la grille
+  add(body, box(0.45, 0.2, 0.9), mats.dark, 1.45, 1.85, 0.0); // caisses à outils
+  add(body, box(0.45, 0.2, 0.9), mats.dark, -1.45, 1.85, 0.0);
+  add(body, box(3.52, 0.16, 0.34), mats.stripe, 0, 1.38, -2.3); // bande d'identification
   emblems(add, mats, body, 1.75, 1.43, 0.35, 0.24);
 
   // Tourelle anguleuse, plus large que haute
@@ -473,21 +481,21 @@ function buildHeavy(teamColor, look) {
   const outline = [[-0.7, 1.7], [0.7, 1.7], [1.4, 0.6], [1.4, -1.15], [0.95, -1.6], [-0.95, -1.6], [-1.4, -1.15], [-1.4, 0.6]];
   add(turret, plan(outline, 0.9, 0.14), mats.turret, 0, 0.05, 0);
   add(turret, plan(outline.map(([x, z]) => [x * 1.1, z * 1.06]), 0.12), mats.stripe, 0, 0.02, 0);
-  add(turret, new THREE.BoxGeometry(1.15, 0.72, 0.5), mats.dark, 0, 0.47, 1.92); // masque du canon
+  add(turret, box(1.15, 0.72, 0.5), mats.dark, 0, 0.47, 1.92); // masque du canon
   add(turret, new THREE.CylinderGeometry(0.36, 0.42, 0.32, 8), mats.turret, -0.6, 1.11, -0.45); // tourelleau du chef
   add(turret, new THREE.CylinderGeometry(0.3, 0.3, 0.08, 8), mats.dark, -0.6, 1.31, -0.45); // trappe du chef
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
-    add(turret, new THREE.BoxGeometry(0.14, 0.1, 0.06), mats.lamp, -0.6 + Math.sin(a) * 0.4, 1.15, -0.45 + Math.cos(a) * 0.4).rotation.y = a; // épiscopes
+    add(turret, box(0.14, 0.1, 0.06), mats.lamp, -0.6 + Math.sin(a) * 0.4, 1.15, -0.45 + Math.cos(a) * 0.4).rotation.y = a; // épiscopes
   }
   add(turret, new THREE.CylinderGeometry(0.3, 0.33, 0.1, 8), mats.dark, 0.55, 1.0, -0.6); // trappe du chargeur
-  add(turret, new THREE.BoxGeometry(0.34, 0.3, 0.42), mats.dark, 0.75, 1.1, 0.75); // viseur
-  add(turret, new THREE.BoxGeometry(1.9, 0.38, 0.7), mats.canvas, 0, 0.55, -2.0); // bâches de la nuque
-  add(turret, new THREE.BoxGeometry(2.1, 0.06, 0.8), mats.metal, 0, 0.34, -2.0); // panier
+  add(turret, box(0.34, 0.3, 0.42), mats.dark, 0.75, 1.1, 0.75); // viseur
+  add(turret, box(1.9, 0.38, 0.7), mats.canvas, 0, 0.55, -2.0); // bâches de la nuque
+  add(turret, box(2.1, 0.06, 0.8), mats.metal, 0, 0.34, -2.0); // panier
   add(turret, new THREE.CylinderGeometry(0.02, 0.02, 1.7, 4), mats.metal, -1.0, 1.85, -1.3); // antennes
   pennant(add, mats, turret, -1.0, 2.7, -1.3);
   add(turret, new THREE.CylinderGeometry(0.02, 0.02, 1.2, 4), mats.metal, 1.0, 1.6, -1.3);
-  add(turret, new THREE.BoxGeometry(0.1, 0.1, 0.8), mats.metal, 0.55, 1.22, -0.25); // mitrailleuse de toit
+  add(turret, box(0.1, 0.1, 0.8), mats.metal, 0.55, 1.22, -0.25); // mitrailleuse de toit
   for (const side of [-1, 1]) {
     for (let i = 0; i < 3; i++) { // lance-pots fumigènes
       const tube = add(turret, new THREE.CylinderGeometry(0.07, 0.07, 0.32, 6), mats.metal, side * (1.25 + i * 0.05), 0.82, 0.95 - i * 0.18);
@@ -501,8 +509,8 @@ function buildHeavy(teamColor, look) {
   turret.add(barrel);
   add(barrel, cylZ(0.15, 0.19, 3.3, 8), mats.metal, 0, 0, 1.65);
   add(barrel, cylZ(0.24, 0.24, 0.5, 8), mats.metal, 0, 0, 1.45); // extracteur de fumée
-  add(barrel, new THREE.BoxGeometry(0.56, 0.3, 0.5), mats.metal, 0, 0, 3.35); // frein de bouche
-  add(barrel, new THREE.BoxGeometry(0.62, 0.08, 0.14), mats.dark, 0, 0, 3.3);
+  add(barrel, box(0.56, 0.3, 0.5), mats.metal, 0, 0, 3.35); // frein de bouche
+  add(barrel, box(0.62, 0.08, 0.14), mats.dark, 0, 0, 3.3);
 
   return finish({
     mats, group, body, turret, barrel, wheels, turretY,
@@ -524,7 +532,7 @@ function buildLight(teamColor, look) {
   const wheels = [];
   const trackGeo = profile([[-2.05, 0.48], [-1.7, 0.02], [1.75, 0.02], [2.15, 0.5], [1.95, 0.82], [-1.85, 0.82]], 0.5);
   const wheelGeo = cylX(0.37, 0.37, 0.12, 9);
-  const hubGeo = new THREE.BoxGeometry(0.04, 0.56, 0.1);
+  const hubGeo = box(0.04, 0.56, 0.1);
   const sprocketGeo = cylX(0.24, 0.24, 0.12, 6);
   for (const side of [-1, 1]) {
     add(group, trackGeo, mats.track, side * 0.98, 0, 0);
@@ -536,20 +544,20 @@ function buildLight(teamColor, look) {
   // Caisse basse au glacis très incliné
   const body = new THREE.Group();
   group.add(body);
-  add(body, new THREE.BoxGeometry(1.45, 0.5, 3.7), mats.dark, 0, 0.55, 0);
+  add(body, box(1.45, 0.5, 3.7), mats.dark, 0, 0.55, 0);
   add(body, profile([[-1.95, 0.78], [2.2, 0.78], [0.95, 1.25], [-1.8, 1.25]], 2.5), mats.hull);
   for (const side of [-1, 1]) {
-    add(body, new THREE.BoxGeometry(0.55, 0.06, 4.2), mats.dark, side * 1.02, 0.84, 0.05); // garde-boue
+    add(body, box(0.55, 0.06, 4.2), mats.dark, side * 1.02, 0.84, 0.05); // garde-boue
     add(body, cylZ(0.11, 0.09, 0.16, 8), mats.lamp, side * 0.78, 1.08, 1.75); // phares ronds
-    add(body, new THREE.BoxGeometry(0.03, 0.2, 0.2), mats.metal, side * 0.66, 1.1, 1.78); // garde de phare
-    add(body, new THREE.BoxGeometry(0.28, 0.42, 0.14), mats.canvas, side * 0.75, 1.0, -2.0); // jerricans
-    add(body, new THREE.BoxGeometry(0.08, 0.1, 0.35), mats.metal, side * 0.55, 0.72, 2.25); // crochet de remorquage
+    add(body, box(0.03, 0.2, 0.2), mats.metal, side * 0.66, 1.1, 1.78); // garde de phare
+    add(body, box(0.28, 0.42, 0.14), mats.canvas, side * 0.75, 1.0, -2.0); // jerricans
+    add(body, box(0.08, 0.1, 0.35), mats.metal, side * 0.55, 0.72, 2.25); // crochet de remorquage
   }
   add(body, cylX(0.12, 0.12, 0.8, 6), mats.metal, 0, 1.05, -1.98); // pot d'échappement
-  add(body, new THREE.BoxGeometry(1.4, 0.07, 0.8), mats.dark, 0, 1.28, -1.25); // grille moteur
+  add(body, box(1.4, 0.07, 0.8), mats.dark, 0, 1.28, -1.25); // grille moteur
   add(body, cylX(0.16, 0.16, 1.8, 8), mats.canvas, 0, 1.4, -1.65); // filet de camouflage roulé
-  add(body, new THREE.BoxGeometry(0.36, 0.12, 0.6), mats.dark, -0.97, 1.31, 0.25); // caisse à outils (sous le masque)
-  add(body, new THREE.BoxGeometry(2.52, 0.12, 0.26), mats.stripe, 0, 1.0, -1.45); // bande d'identification
+  add(body, box(0.36, 0.12, 0.6), mats.dark, -0.97, 1.31, 0.25); // caisse à outils (sous le masque)
+  add(body, box(2.52, 0.12, 0.26), mats.stripe, 0, 1.0, -1.45); // bande d'identification
   emblems(add, mats, body, 1.25, 1.05, 0.15, 0.15);
 
   // Petite tourelle hexagonale avec optique de reconnaissance
@@ -559,11 +567,11 @@ function buildLight(teamColor, look) {
   body.add(turret);
   add(turret, new THREE.CylinderGeometry(0.66, 0.86, 0.6, 6).rotateY(Math.PI / 6).scale(1, 1, 1.15), mats.turret, 0, 0.3, 0);
   add(turret, new THREE.CylinderGeometry(0.83, 0.88, 0.08, 6).rotateY(Math.PI / 6).scale(1, 1, 1.15), mats.stripe, 0, 0.06, 0);
-  add(turret, new THREE.BoxGeometry(0.5, 0.34, 0.36), mats.dark, 0, 0.3, 0.9); // masque du canon
-  add(turret, new THREE.BoxGeometry(0.36, 0.22, 0.3), mats.dark, 0.32, 0.71, 0.1); // optique
-  add(turret, new THREE.BoxGeometry(0.28, 0.12, 0.04), mats.lamp, 0.32, 0.72, 0.26); // vitre de l'optique
+  add(turret, box(0.5, 0.34, 0.36), mats.dark, 0, 0.3, 0.9); // masque du canon
+  add(turret, box(0.36, 0.22, 0.3), mats.dark, 0.32, 0.71, 0.1); // optique
+  add(turret, box(0.28, 0.12, 0.04), mats.lamp, 0.32, 0.72, 0.26); // vitre de l'optique
   add(turret, new THREE.CylinderGeometry(0.26, 0.28, 0.08, 8), mats.dark, -0.25, 0.64, -0.2); // trappe
-  add(turret, new THREE.BoxGeometry(0.75, 0.24, 0.4), mats.canvas, 0, 0.32, -1.05); // sac de nuque
+  add(turret, box(0.75, 0.24, 0.4), mats.canvas, 0, 0.32, -1.05); // sac de nuque
   add(turret, new THREE.CylinderGeometry(0.015, 0.015, 2.6, 4), mats.metal, -0.45, 1.9, -0.6); // grande antenne
   pennant(add, mats, turret, -0.45, 3.2, -0.6);
   for (const side of [-1, 1]) {
@@ -600,7 +608,7 @@ function buildHornet(teamColor, look) {
   const wheels = [];
   const trackGeo = profile([[-2.2, 0.5], [-1.85, 0.02], [1.9, 0.02], [2.3, 0.52], [2.1, 0.86], [-2.0, 0.86]], 0.52);
   const wheelGeo = cylX(0.32, 0.32, 0.12, 8);
-  const hubGeo = new THREE.BoxGeometry(0.04, 0.46, 0.1);
+  const hubGeo = box(0.04, 0.46, 0.1);
   const sprocketGeo = cylX(0.24, 0.24, 0.12, 6);
   for (const side of [-1, 1]) {
     add(group, trackGeo, mats.track, side * 1.08, 0, 0);
@@ -612,18 +620,18 @@ function buildHornet(teamColor, look) {
   // Caisse fine, nez en pointe
   const body = new THREE.Group();
   group.add(body);
-  add(body, new THREE.BoxGeometry(1.6, 0.52, 4.0), mats.dark, 0, 0.58, 0);
+  add(body, box(1.6, 0.52, 4.0), mats.dark, 0, 0.58, 0);
   add(body, profile([[-2.1, 0.84], [2.35, 0.84], [1.25, 1.32], [-1.95, 1.32]], 2.7), mats.hull);
   add(body, profile([[1.3, 1.3], [2.3, 0.88], [2.38, 0.92], [1.4, 1.36]], 1.6), mats.dark); // plaque de glacis
   for (const side of [-1, 1]) {
-    add(body, new THREE.BoxGeometry(0.6, 0.06, 4.5), mats.dark, side * 1.1, 0.9, 0.05); // garde-boue
-    add(body, new THREE.BoxGeometry(0.2, 0.14, 0.1), mats.lamp, side * 0.75, 1.02, 2.05); // phare
+    add(body, box(0.6, 0.06, 4.5), mats.dark, side * 1.1, 0.9, 0.05); // garde-boue
+    add(body, box(0.2, 0.14, 0.1), mats.lamp, side * 0.75, 1.02, 2.05); // phare
     add(body, cylZ(0.09, 0.09, 0.42, 6), mats.metal, side * 0.7, 1.05, -2.2); // échappement
     // ailerons de caisse (bandes jaunes de « frelon » sur les garde-boue)
-    for (let i = 0; i < 3; i++) add(body, new THREE.BoxGeometry(0.55, 0.07, 0.22), mats.stripe, side * 1.1, 0.95, 1.4 - i * 0.5);
+    for (let i = 0; i < 3; i++) add(body, box(0.55, 0.07, 0.22), mats.stripe, side * 1.1, 0.95, 1.4 - i * 0.5);
   }
-  add(body, new THREE.BoxGeometry(1.3, 0.08, 0.9), mats.dark, 0, 1.36, -1.3); // grille moteur
-  add(body, new THREE.BoxGeometry(2.72, 0.12, 0.26), mats.stripe, 0, 1.12, -1.6); // bande d'identification
+  add(body, box(1.3, 0.08, 0.9), mats.dark, 0, 1.36, -1.3); // grille moteur
+  add(body, box(2.72, 0.12, 0.26), mats.stripe, 0, 1.12, -1.6); // bande d'identification
   emblems(add, mats, body, 1.35, 1.1, 0.0, 0.16);
 
   // Tourelle basse et large, chargeur automatique en nuque
@@ -634,11 +642,11 @@ function buildHornet(teamColor, look) {
   const outline = [[-0.55, 1.05], [0.55, 1.05], [1.0, 0.35], [1.0, -0.7], [0.7, -1.0], [-0.7, -1.0], [-1.0, -0.7], [-1.0, 0.35]];
   add(turret, plan(outline, 0.55, 0.12), mats.turret, 0, 0.02, 0);
   add(turret, plan(outline.map(([x, z]) => [x * 1.08, z * 1.05]), 0.1), mats.stripe, 0, 0.0, 0);
-  add(turret, new THREE.BoxGeometry(1.5, 0.48, 0.75), mats.dark, 0, 0.3, -1.25); // chargeur (nuque)
+  add(turret, box(1.5, 0.48, 0.75), mats.dark, 0, 0.3, -1.25); // chargeur (nuque)
   for (let i = 0; i < 3; i++) add(turret, cylX(0.1, 0.1, 1.55, 8), mats.metal, 0, 0.3, -1.05 - i * 0.22).scale.set(1, 0.6, 1); // obus visibles
-  add(turret, new THREE.BoxGeometry(0.6, 0.3, 0.42), mats.dark, 0, 0.3, 1.1); // masque
-  add(turret, new THREE.BoxGeometry(0.3, 0.2, 0.28), mats.dark, -0.5, 0.68, 0.15); // optique
-  add(turret, new THREE.BoxGeometry(0.24, 0.1, 0.04), mats.lamp, -0.5, 0.69, 0.3);
+  add(turret, box(0.6, 0.3, 0.42), mats.dark, 0, 0.3, 1.1); // masque
+  add(turret, box(0.3, 0.2, 0.28), mats.dark, -0.5, 0.68, 0.15); // optique
+  add(turret, box(0.24, 0.1, 0.04), mats.lamp, -0.5, 0.69, 0.3);
   add(turret, new THREE.CylinderGeometry(0.015, 0.015, 2.0, 4), mats.metal, 0.6, 1.5, -0.7); // antenne
   pennant(add, mats, turret, 0.6, 2.5, -0.7);
 
@@ -648,7 +656,7 @@ function buildHornet(teamColor, look) {
   turret.add(barrel);
   add(barrel, cylZ(0.09, 0.11, 1.6, 8), mats.metal, 0, 0, 0.8);
   add(barrel, cylZ(0.14, 0.14, 0.4, 8), mats.metal, 0, 0, 1.6);
-  for (let i = 0; i < 3; i++) add(barrel, new THREE.BoxGeometry(0.32, 0.05, 0.06), mats.dark, 0, 0, 1.48 + i * 0.12);
+  for (let i = 0; i < 3; i++) add(barrel, box(0.32, 0.05, 0.06), mats.dark, 0, 0, 1.48 + i * 0.12);
 
   return finish({
     mats, group, body, turret, barrel, wheels, turretY,
@@ -670,7 +678,7 @@ function buildDestroyer(teamColor, look) {
   const wheels = [];
   const trackGeo = profile([[-2.85, 0.55], [-2.45, 0.02], [2.5, 0.02], [2.9, 0.55], [2.65, 0.92], [-2.65, 0.92]], 0.66);
   const wheelGeo = cylX(0.34, 0.34, 0.14, 8);
-  const hubGeo = new THREE.BoxGeometry(0.04, 0.5, 0.12);
+  const hubGeo = box(0.04, 0.5, 0.12);
   const sprocketGeo = cylX(0.26, 0.26, 0.14, 6);
   for (const side of [-1, 1]) {
     add(group, trackGeo, mats.track, side * 1.24, 0, 0);
@@ -682,22 +690,22 @@ function buildDestroyer(teamColor, look) {
   // Caisse et casemate : un seul bloc aux flancs inclinés, très bas
   const body = new THREE.Group();
   group.add(body);
-  add(body, new THREE.BoxGeometry(1.9, 0.6, 5.3), mats.dark, 0, 0.62, 0);
+  add(body, box(1.9, 0.6, 5.3), mats.dark, 0, 0.62, 0);
   add(body, profile([[-2.8, 0.92], [2.95, 0.92], [1.9, 1.25], [-2.6, 1.25]], 3.1), mats.hull);
   // casemate : plan trapézoïdal (plus étroit en haut), glacis fuyant vers l'avant
   const casemate = profile([[-2.3, 0.0], [1.95, 0.0], [0.8, 0.72], [-2.0, 0.72]], 2.4);
   add(body, casemate, mats.turret, 0, 1.24, 0);
   add(body, profile([[-2.32, 0.0], [1.98, 0.0], [1.88, 0.06], [-2.32, 0.06]], 2.85), mats.stripe, 0, 1.2, 0); // liseré d'identification
   for (const side of [-1, 1]) {
-    add(body, new THREE.BoxGeometry(0.6, 0.07, 5.8), mats.dark, side * 1.3, 1.0, 0); // garde-boue
-    add(body, new THREE.BoxGeometry(0.22, 0.14, 0.1), mats.lamp, side * 1.05, 1.08, 2.92); // phare
+    add(body, box(0.6, 0.07, 5.8), mats.dark, side * 1.3, 1.0, 0); // garde-boue
+    add(body, box(0.22, 0.14, 0.1), mats.lamp, side * 1.05, 1.08, 2.92); // phare
     add(body, cylZ(0.11, 0.11, 0.5, 6), mats.metal, side * 0.95, 1.25, -2.85); // échappement
     // plaques de blindage additionnelles sur les flancs de la casemate
-    add(body, new THREE.BoxGeometry(0.06, 0.5, 1.6), mats.dark, side * 1.16, 1.5, -0.6).rotation.z = side * 0.32;
+    add(body, box(0.06, 0.5, 1.6), mats.dark, side * 1.16, 1.5, -0.6).rotation.z = side * 0.32;
   }
-  add(body, new THREE.BoxGeometry(1.5, 0.08, 1.0), mats.dark, 0, 1.98, -1.4); // trappes de toit
+  add(body, box(1.5, 0.08, 1.0), mats.dark, 0, 1.98, -1.4); // trappes de toit
   add(body, new THREE.CylinderGeometry(0.3, 0.34, 0.2, 8), mats.turret, -0.5, 2.05, -0.5); // tourelleau
-  add(body, new THREE.BoxGeometry(0.26, 0.08, 0.06), mats.lamp, -0.5, 2.12, -0.24); // épiscope
+  add(body, box(0.26, 0.08, 0.06), mats.lamp, -0.5, 2.12, -0.24); // épiscope
   add(body, cylX(0.15, 0.15, 2.0, 8), mats.canvas, 0, 1.4, -2.75); // filet roulé
   add(body, new THREE.CylinderGeometry(0.02, 0.02, 1.4, 4), mats.metal, 0.75, 2.6, -1.8); // antenne
   pennant(add, mats, body, 0.75, 3.3, -1.8);
@@ -709,7 +717,7 @@ function buildDestroyer(teamColor, look) {
   turret.position.set(0, turretY, 1.3);
   body.add(turret);
   add(turret, new THREE.SphereGeometry(0.42, 8, 6), mats.dark, 0, 0, 0.1); // rotule
-  add(turret, new THREE.BoxGeometry(0.75, 0.55, 0.35), mats.turret, 0, 0, 0.35).rotation.x = 0.5; // masque en pente
+  add(turret, box(0.75, 0.55, 0.35), mats.turret, 0, 0, 0.35).rotation.x = 0.5; // masque en pente
 
   // Très long canon avec frein de bouche
   const barrel = new THREE.Group();
@@ -717,7 +725,7 @@ function buildDestroyer(teamColor, look) {
   turret.add(barrel);
   add(barrel, cylZ(0.1, 0.13, 3.2, 8), mats.metal, 0, 0, 1.6);
   add(barrel, cylZ(0.17, 0.17, 0.45, 8), mats.metal, 0, 0, 1.2); // extracteur de fumée
-  add(barrel, new THREE.BoxGeometry(0.36, 0.2, 0.42), mats.metal, 0, 0, 3.3); // frein de bouche
+  add(barrel, box(0.36, 0.2, 0.42), mats.metal, 0, 0, 3.3); // frein de bouche
 
   return finish({
     mats, group, body, turret, barrel, wheels, turretY,
@@ -738,7 +746,7 @@ function buildArtillery(teamColor, look) {
   const wheels = [];
   const trackGeo = profile([[-2.65, 0.55], [-2.25, 0.02], [2.3, 0.02], [2.7, 0.55], [2.45, 0.95], [-2.45, 0.95]], 0.66);
   const wheelGeo = cylX(0.35, 0.35, 0.14, 8);
-  const hubGeo = new THREE.BoxGeometry(0.04, 0.52, 0.12);
+  const hubGeo = box(0.04, 0.52, 0.12);
   const sprocketGeo = cylX(0.26, 0.26, 0.14, 6);
   for (const side of [-1, 1]) {
     add(group, trackGeo, mats.track, side * 1.24, 0, 0);
@@ -750,20 +758,20 @@ function buildArtillery(teamColor, look) {
   // Caisse : moteur à l'avant, compartiment de combat à l'arrière
   const body = new THREE.Group();
   group.add(body);
-  add(body, new THREE.BoxGeometry(1.9, 0.62, 5.0), mats.dark, 0, 0.64, 0);
+  add(body, box(1.9, 0.62, 5.0), mats.dark, 0, 0.64, 0);
   add(body, profile([[-2.6, 0.95], [2.65, 0.95], [1.7, 1.42], [-2.6, 1.42]], 3.1), mats.hull);
   for (const side of [-1, 1]) {
-    add(body, new THREE.BoxGeometry(0.62, 0.07, 5.4), mats.dark, side * 1.3, 1.02, 0); // garde-boue
-    add(body, new THREE.BoxGeometry(0.22, 0.14, 0.1), mats.lamp, side * 1.05, 1.15, 2.6); // phare
-    add(body, new THREE.BoxGeometry(0.45, 0.35, 1.2), mats.dark, side * 1.3, 1.25, -1.6); // coffres à munitions
-    add(body, new THREE.BoxGeometry(0.1, 0.5, 0.12), mats.metal, side * 0.9, 0.7, -2.65); // bêches arrière
+    add(body, box(0.62, 0.07, 5.4), mats.dark, side * 1.3, 1.02, 0); // garde-boue
+    add(body, box(0.22, 0.14, 0.1), mats.lamp, side * 1.05, 1.15, 2.6); // phare
+    add(body, box(0.45, 0.35, 1.2), mats.dark, side * 1.3, 1.25, -1.6); // coffres à munitions
+    add(body, box(0.1, 0.5, 0.12), mats.metal, side * 0.9, 0.7, -2.65); // bêches arrière
   }
-  add(body, new THREE.BoxGeometry(1.4, 0.08, 1.0), mats.dark, 0, 1.46, 1.6); // grille moteur (avant)
+  add(body, box(1.4, 0.08, 1.0), mats.dark, 0, 1.46, 1.6); // grille moteur (avant)
   add(body, cylZ(0.1, 0.1, 0.6, 6), mats.metal, 0.95, 1.55, 1.1); // échappement
-  add(body, new THREE.BoxGeometry(3.12, 0.12, 0.28), mats.stripe, 0, 1.2, 2.0); // bande d'identification
+  add(body, box(3.12, 0.12, 0.28), mats.stripe, 0, 1.2, 2.0); // bande d'identification
   // support de route du tube (à l'avant)
-  add(body, new THREE.BoxGeometry(0.1, 0.55, 0.1), mats.metal, -0.2, 1.7, 2.1);
-  add(body, new THREE.BoxGeometry(0.1, 0.55, 0.1), mats.metal, 0.2, 1.7, 2.1);
+  add(body, box(0.1, 0.55, 0.1), mats.metal, -0.2, 1.7, 2.1);
+  add(body, box(0.1, 0.55, 0.1), mats.metal, 0.2, 1.7, 2.1);
   emblems(add, mats, body, 1.55, 1.18, 0.6, 0.2);
 
   // Grande tourelle-caisson à l'arrière
@@ -774,13 +782,13 @@ function buildArtillery(teamColor, look) {
   const outline = [[-0.9, 1.3], [0.9, 1.3], [1.3, 0.7], [1.3, -1.5], [-1.3, -1.5], [-1.3, 0.7]];
   add(turret, plan(outline, 1.15, 0.1), mats.turret, 0, 0.02, 0);
   add(turret, plan(outline.map(([x, z]) => [x * 1.06, z * 1.04]), 0.1), mats.stripe, 0, 0.0, 0);
-  add(turret, new THREE.BoxGeometry(2.2, 0.1, 2.2), mats.dark, 0, 1.2, -0.35); // toit
+  add(turret, box(2.2, 0.1, 2.2), mats.dark, 0, 1.2, -0.35); // toit
   add(turret, new THREE.CylinderGeometry(0.3, 0.33, 0.22, 8), mats.dark, 0.6, 1.33, -0.6); // trappe
-  add(turret, new THREE.BoxGeometry(0.1, 0.1, 0.8), mats.metal, 0.6, 1.5, -0.4); // mitrailleuse de toit
-  add(turret, new THREE.BoxGeometry(0.9, 0.7, 0.4), mats.dark, 0, 0.62, 1.4); // masque
+  add(turret, box(0.1, 0.1, 0.8), mats.metal, 0.6, 1.5, -0.4); // mitrailleuse de toit
+  add(turret, box(0.9, 0.7, 0.4), mats.dark, 0, 0.62, 1.4); // masque
   add(turret, new THREE.CylinderGeometry(0.02, 0.02, 1.6, 4), mats.metal, -1.0, 1.95, -1.2); // antenne
   pennant(add, mats, turret, -1.0, 2.75, -1.2);
-  for (const side of [-1, 1]) add(turret, new THREE.BoxGeometry(0.06, 0.6, 1.4), mats.dark, side * 1.33, 0.6, -0.4); // plaques latérales
+  for (const side of [-1, 1]) add(turret, box(0.06, 0.6, 1.4), mats.dark, side * 1.33, 0.6, -0.4); // plaques latérales
 
   // Tube pointé vers le ciel (pivot dans le masque) ; le groupe `barrel` recule le long du tube
   const elev = new THREE.Group();
@@ -791,7 +799,7 @@ function buildArtillery(teamColor, look) {
   elev.add(barrel);
   add(barrel, cylZ(0.14, 0.17, 3.4, 8), mats.metal, 0, 0, 1.6);
   add(barrel, cylZ(0.24, 0.24, 0.9, 8), mats.metal, 0, 0, 0.3); // berceau / récupérateur
-  add(barrel, new THREE.BoxGeometry(0.5, 0.3, 0.45), mats.metal, 0, 0, 3.35); // frein de bouche
+  add(barrel, box(0.5, 0.3, 0.45), mats.metal, 0, 0, 3.35); // frein de bouche
 
   return finish({
     mats, group, body, turret, barrel, wheels, turretY,
@@ -803,8 +811,200 @@ function buildArtillery(teamColor, look) {
   });
 }
 
+// ------------------------------------------------------- char importé (.glb libre de droits)
+
+// Sépare un maillage en 3 lots selon la zone de la palette de couleurs (UV) : rouge = peinture, gris = métal, sombre = le reste.
+function splitByAtlas(geo) {
+  const g = geo.index ? geo.toNonIndexed() : geo;
+  const pos = g.attributes.position, nor = g.attributes.normal, uv = g.attributes.uv;
+  const out = { paint: [[], []], metal: [[], []], dark: [[], []] };
+  for (let i = 0; i < pos.count; i += 3) {
+    const u = (uv.getX(i) + uv.getX(i + 1) + uv.getX(i + 2)) / 3, v = (uv.getY(i) + uv.getY(i + 1) + uv.getY(i + 2)) / 3;
+    const k = u > 0.48 ? (v < 0.48 ? 'paint' : v > 0.52 ? 'metal' : 'dark') : 'dark';
+    for (let j = 0; j < 3; j++) {
+      out[k][0].push(pos.getX(i + j), pos.getY(i + j), pos.getZ(i + j));
+      out[k][1].push(nor.getX(i + j), nor.getY(i + j), nor.getZ(i + j));
+    }
+  }
+  const res = {};
+  for (const [k, [p, n]] of Object.entries(out)) {
+    if (!p.length) continue;
+    const bg = new THREE.BufferGeometry();
+    bg.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+    bg.setAttribute('normal', new THREE.Float32BufferAttribute(n, 3));
+    res[k] = bg;
+  }
+  return res;
+}
+
+// Habille un modèle importé avec les matériaux du jeu (couleur d'équipe, skins, usure).
+// cfg : { hullLength } longueur de la caisse en mètres (le modèle est mis à l'échelle), trackX, wheelRadius.
+function buildGlbTank(src, teamColor, look, cfg) {
+  const { mats, add } = kit(teamColor, look);
+  // géométries dans le repère du modèle, transformations des nœuds appliquées
+  const parts = { chassis: [], turret: [] };
+  let pivot = new THREE.Vector3(), muzzle = new THREE.Vector3();
+  src.traverse((o) => {
+    if (o.name === 'TurretPivot') pivot.setFromMatrixPosition(o.matrixWorld);
+    if (o.name === 'Muzzle') muzzle.setFromMatrixPosition(o.matrixWorld);
+    if (!o.isMesh) return;
+    const g = o.geometry.clone().applyMatrix4(o.matrixWorld);
+    let n = o, isTurret = false;
+    while (n) { if (/turret/i.test(n.name)) isTurret = true; n = n.parent; }
+    parts[isTurret ? 'turret' : 'chassis'].push(g);
+  });
+  // orientation : le canon doit viser +Z
+  const a = Math.atan2(-(muzzle.x - pivot.x), muzzle.z - pivot.z);
+  const place = new THREE.Matrix4().makeRotationY(a);
+  const chassisBox = new THREE.Box3();
+  for (const g of parts.chassis) { g.applyMatrix4(place); g.computeBoundingBox(); chassisBox.union(g.boundingBox); }
+  for (const g of parts.turret) g.applyMatrix4(place);
+  pivot.applyMatrix4(place);
+  const k = cfg.hullLength / (chassisBox.max.z - chassisBox.min.z);
+  const cx = (chassisBox.max.x + chassisBox.min.x) / 2, cz = (chassisBox.max.z + chassisBox.min.z) / 2, by = chassisBox.min.y;
+  const fit = new THREE.Matrix4().makeScale(k, k, k).multiply(new THREE.Matrix4().makeTranslation(-cx, -by, -cz));
+  for (const g of [...parts.chassis, ...parts.turret]) g.applyMatrix4(fit);
+  pivot.applyMatrix4(fit);
+
+  const group = new THREE.Group();
+  const body = new THREE.Group();
+  group.add(body);
+  for (const g0 of parts.chassis) {
+    const sp = splitByAtlas(g0);
+    if (sp.paint) add(body, sp.paint, mats.hull);
+    if (sp.metal) add(body, sp.metal, mats.metal);
+    if (sp.dark) add(body, sp.dark, mats.track);
+  }
+  const turretY = pivot.y;
+  const turret = new THREE.Group();
+  turret.position.set(pivot.x, pivot.y, pivot.z);
+  body.add(turret);
+  const barrel = new THREE.Group();
+  const barrelStart = cfg.barrelStart ?? 1.4; // au-delà (en mètres devant le pivot), c'est le canon : il peut reculer
+  barrel.position.set(0, 0, barrelStart);
+  turret.add(barrel);
+  for (const g0 of parts.turret) {
+    g0.translate(-pivot.x, -pivot.y, -pivot.z);
+    const sp = splitByAtlas(g0);
+    for (const [kind, geo] of Object.entries(sp)) {
+      const mat = kind === 'paint' ? mats.turret : kind === 'metal' ? mats.metal : mats.dark;
+      // on coupe le canon du reste de la tourelle
+      const p = geo.attributes.position, n = geo.attributes.normal;
+      const front = [[], []], rest = [[], []];
+      for (let i = 0; i < p.count; i += 3) {
+        const zc = (p.getZ(i) + p.getZ(i + 1) + p.getZ(i + 2)) / 3;
+        const dst = zc > barrelStart ? front : rest;
+        for (let j = 0; j < 3; j++) {
+          dst[0].push(p.getX(i + j), p.getY(i + j), p.getZ(i + j));
+          dst[1].push(n.getX(i + j), n.getY(i + j), n.getZ(i + j));
+        }
+      }
+      for (const [d, parent, dz] of [[rest, turret, 0], [front, barrel, -barrelStart]]) {
+        if (!d[0].length) continue;
+        const bg = new THREE.BufferGeometry();
+        bg.setAttribute('position', new THREE.Float32BufferAttribute(d[0], 3));
+        bg.setAttribute('normal', new THREE.Float32BufferAttribute(d[1], 3));
+        bg.translate(0, 0, dz);
+        add(parent, bg, parent === barrel ? mats.metal : mat);
+      }
+    }
+  }
+  const half = cfg.hullLength / 2, width = (chassisBox.max.x - chassisBox.min.x) * k;
+  // antenne + fanion d'équipe (le modèle n'en a pas)
+  add(turret, new THREE.CylinderGeometry(0.02, 0.02, 1.7, 4), mats.metal, -width * 0.3, 1.2, -1.0);
+  pennant(add, mats, turret, -width * 0.3, 2.05, -1.0);
+  return finish({
+    mats, group, body, turret, barrel, wheels: [], turretY,
+    wheelRadius: cfg.wheelRadius, trackX: width * 0.38, rearZ: -half,
+    exhausts: [[-0.7, 1.3, -half], [0.7, 1.3, -half]],
+    engine: [0, 1.5, -half * 0.5],
+  });
+}
+
+// Blindé de reconnaissance à 6 roues (« Recon Tank », MNDV.ecb, CC-BY 4.0 / CC0) : modèle OBJ en repère Blender (Z haut, avant = -Y).
+// Chaque objet du fichier est repris tel quel ; les roues (3 essieux) tournent, le canon recule.
+function buildReconTank(src, teamColor, look) {
+  const { mats, add } = kit(teamColor, look);
+  const S = 0.62; // échelle : coque ~4,3 m comme le Lynx
+  const geos = {};
+  src.traverse((o) => {
+    if (!o.isMesh) return;
+    const g = o.geometry.clone();
+    g.rotateX(-Math.PI / 2); // Blender -> jeu : (x, y, z) -> (x, z, -y), l'avant (-Y) devient +Z
+    g.scale(S, S, S);
+    geos[o.name] = g;
+  });
+  const need = ['Cube_Cube.004', 'Cylinder', 'Cylinder.006', 'Cylinder.007', 'Cylinder.001', 'Cylinder.002'];
+  if (need.some((n) => !geos[n])) throw new Error('Recon Tank : objets introuvables');
+  geos.Cylinder.computeBoundingBox();
+  const lift = -geos.Cylinder.boundingBox.min.y; // les roues touchent le sol (y = 0)
+  for (const g of Object.values(geos)) g.translate(0, lift, 0);
+
+  const group = new THREE.Group();
+  const body = new THREE.Group();
+  group.add(body);
+
+  // roues : un objet par essieu (les deux roues), pivot au centre de l'essieu
+  const wheels = [];
+  for (const n of ['Cylinder', 'Cylinder.006', 'Cylinder.007']) {
+    const g = geos[n];
+    g.computeBoundingBox();
+    const c = g.boundingBox.getCenter(new THREE.Vector3());
+    g.translate(-c.x, -c.y, -c.z);
+    wheels.push(add(group, g, mats.track, c.x, c.y, c.z));
+  }
+  // caisse
+  add(body, geos['Cube_Cube.004'], mats.hull);
+  geos['Cube_Cube.004'].computeBoundingBox();
+  const hb = geos['Cube_Cube.004'].boundingBox;
+  for (const n of ['Cube.003_Cube.007', 'Cube.001_Cube.005']) if (geos[n]) add(body, geos[n], mats.dark);
+  add(body, box(hb.max.x * 2 + 0.03, 0.12, 0.3), mats.stripe, 0, hb.min.y + (hb.max.y - hb.min.y) * 0.45, hb.min.z + (hb.max.z - hb.min.z) * 0.3); // bande d'identification
+
+  // tourelle : pivot au centre de sa base
+  geos['Cylinder.001'].computeBoundingBox();
+  const tb = geos['Cylinder.001'].boundingBox;
+  const pivot = new THREE.Vector3((tb.min.x + tb.max.x) / 2, tb.min.y, (tb.min.z + tb.max.z) / 2);
+  const turretY = pivot.y;
+  const turret = new THREE.Group();
+  turret.position.copy(pivot);
+  body.add(turret);
+  for (const n of ['Cylinder.001', 'Cylinder.005', 'Cylinder.004', 'Cube.005_Cube.010', 'Cube.004_Cube.009']) {
+    if (!geos[n]) continue;
+    geos[n].translate(-pivot.x, -pivot.y, -pivot.z);
+    add(turret, geos[n], n === 'Cylinder.001' || n === 'Cylinder.004' ? mats.turret : mats.dark);
+  }
+  // canon (recule au tir) : géométrie dans le repère de la tourelle, groupe à l'origine
+  const barrel = new THREE.Group();
+  turret.add(barrel);
+  for (const n of ['Cylinder.002', 'Cylinder.003']) {
+    if (!geos[n]) continue;
+    geos[n].translate(-pivot.x, -pivot.y, -pivot.z);
+    add(barrel, geos[n], mats.metal);
+  }
+  // antenne (dernier objet posé : pennant() la reprend) + fanion d'équipe
+  let ax = -0.3, ay = 1.9, az = -0.6;
+  if (geos['Cube.002_Cube.008']) {
+    const g = geos['Cube.002_Cube.008'];
+    g.translate(-pivot.x, -pivot.y, -pivot.z);
+    g.computeBoundingBox();
+    ax = (g.boundingBox.min.x + g.boundingBox.max.x) / 2; ay = g.boundingBox.max.y; az = (g.boundingBox.min.z + g.boundingBox.max.z) / 2;
+    add(turret, g, mats.metal);
+  }
+  pennant(add, mats, turret, ax, ay, az);
+
+  const rearZ = hb.min.z;
+  return finish({
+    mats, group, body, turret, barrel, wheels, turretY,
+    wheelRadius: 0.84 * S, trackX: 1.6 * S, rearZ,
+    exhausts: [[-0.5, hb.max.y - 0.2, rearZ], [0.5, hb.max.y - 0.2, rearZ]],
+    engine: [0, hb.max.y, rearZ * 0.5],
+  });
+}
+
 export const TANK_MODELS = {
-  standard: buildStandard, heavy: buildHeavy, light: buildLight,
+  standard: buildStandard,
+  light: GLB.recon ? (c, l) => { try { return buildReconTank(GLB.recon, c, l); } catch (e) { console.warn(e); return buildLight(c, l); } } : buildLight,
+  heavy: GLB.heavy ? (c, l) => buildGlbTank(GLB.heavy, c, l, { hullLength: 6.0, wheelRadius: 0.36 }) : buildHeavy,
   hornet: buildHornet, destroyer: buildDestroyer, artillery: buildArtillery,
 };
 

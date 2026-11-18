@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { pointBlocked, heightAt } from '/shared/map.js';
 import { shellHeight, arcPoint } from '/shared/tank.js';
+import { Q } from './quality.js';
 
 const rnd = (a, b) => a + Math.random() * (b - a);
 const MAX_PARTICLES = 900;
@@ -135,7 +136,7 @@ export class Effects {
 
   // o : { geo, color, lit, x, y, z, vx, vy, vz, life, s0, s1, gravity, opacity, drag, flat, yaw }
   particle(o) {
-    if (this.particles.length >= MAX_PARTICLES) return;
+    if (this.particles.length >= MAX_PARTICLES * Q.s.effects || (Q.s.effects < 1 && Math.random() > Q.s.effects)) return; // densité réglable
     const opts = { color: o.color, transparent: true, opacity: o.opacity ?? 1, depthWrite: false, side: o.flat ? THREE.DoubleSide : THREE.FrontSide };
     const material = o.lit ? new THREE.MeshLambertMaterial({ ...opts, flatShading: true }) : new THREE.MeshBasicMaterial(opts);
     const mesh = new THREE.Mesh(o.geo ?? this.geo.blob, material);

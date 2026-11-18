@@ -2,6 +2,7 @@
 // Une fonction par `kind` ; elle reçoit l'objet de la carte et pose ses maillages.
 // Les volumes visibles collent aux volumes de collision (sauf détails décoratifs fins).
 import * as THREE from 'three';
+import { pineMaterials } from './trees.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -35,7 +36,7 @@ export function propBuilders({ theme, group, mat, add, snowMat, concreteMat, tri
     plank: mat(0x7a5a3e),
     plankDark: mat(0x5c4330),
     palmTrunk: mat(0x8a6a45),
-    palmLeaf: mat(snowy ? theme.leaf[0] : 0x5a8f3a),
+    palmLeaf: pineMaterials(theme).leafA, // palmes plumeuses (même texture d'aiguilles que les conifères)
     slit: mat(0x1f2124),
   };
 
