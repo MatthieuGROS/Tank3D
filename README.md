@@ -77,7 +77,7 @@ en face (et à tes côtés si tu veux), puis lance.
 
 ## Campagne coopérative
 
-Dans le salon, l'hôte choisit le mode **Campagne** (en haut à droite). Tout le monde rejoint
+Dans le salon, l'hôte choisit le mode **Campagne** (page **Opérations**). Tout le monde rejoint
 la même escouade et affronte l'IA ensemble : 12 missions en 3 chapitres. Le chapitre I a une carte par mission ; les chapitres II et III se
 jouent sur les cartes d'escarmouche **Oasis** et **Deux-Rives**, avec un décor et un déploiement
 propres à chaque mission.
@@ -111,15 +111,15 @@ propres à chaque mission.
 - **Progression par compte** : chaque joueur de l'escouade qui termine la mission l'enregistre sur son
   compte. L'escouade peut jouer toute mission débloquée par l'un des joueurs présents.
   Pour tout débloquer d'un coup (missions et chars) : lancer le serveur avec la variable `TANK3D_UNLOCK=1`.
-- **Carte de campagne** : bouton dans le salon (mode Campagne). Les 12 missions sur la carte des
-  3 chapitres, avec tes étoiles, les missions verrouillées et le détail par difficulté ; l'hôte peut y
-  choisir la mission.
+- **Carte de campagne** : page **Opérations** du salon (mode Campagne). Les 12 missions sur la carte des
+  3 chapitres, avec tes étoiles, les missions verrouillées et le détail par difficulté ; l'hôte y choisit la
+  mission et la difficulté.
 
 ### Skins
 
-Dans la carte **Char** du salon, chaque joueur choisit le skin (la peinture) de son char parmi ceux qu'il a
-débloqués ; cliquer un skin verrouillé affiche son nom et la condition pour l'obtenir (sans l'afficher sur le char). Le choix est
-enregistré sur le compte. Quel que soit le skin, les **bandes d'identification**, l'anneau de tourelle et le
+Dans l'onglet **Peintures** du hangar, chaque joueur choisit le skin de son char parmi ceux qu'il a
+débloqués (aperçu sur son char) ; cliquer un skin verrouillé affiche sa condition d'obtention et ta progression
+(sans l'afficher sur le char). Le choix est enregistré sur le compte. Quel que soit le skin, les **bandes d'identification**, l'anneau de tourelle et le
 **fanion d'antenne** restent aux couleurs de l'équipe : on reconnaît toujours un allié d'un ennemi.
 
 | Skin | Comment l'obtenir |
@@ -130,9 +130,19 @@ enregistré sur le compte. Quel que soit le skin, les **bandes d'identification*
 | Givre (camouflage numérique d'hiver, chevrons de vétéran) | réussir les 12 missions en Vétéran, ★★ sur chacune |
 | **Souverain** (laque noire, filets d'or animés, canon doré, lauriers, paillettes d'or) | réussir les 12 missions en Élite, ★★★ sur chacune |
 
-### Carte et char
+### Le salon : hangar, opérations, boutique
 
-L'hôte choisit la carte, chaque joueur choisit son char (au centre du salon, flèches ‹ ›).
+Le salon se compose de trois pages, accessibles depuis la barre du haut (qui garde en permanence tes crédits, ton grade et ton XP) :
+
+| Page | Contenu |
+| --- | --- |
+| **Hangar** | Ton char en 3D (glisse à la souris pour le faire tourner), sa fiche technique (jauges, dégâts reçus selon la face touchée), l'onglet Peintures, l'équipage à gauche, le **carrousel de chars** en bas (clic ou flèches ← → : un char à toi est équipé tout de suite, un char à acheter est seulement exposé) et le bouton de lancement |
+| **Opérations** | Le mode (Escarmouche / Campagne), la carte avec un grand aperçu et le nombre de manches, ou la carte de campagne et la difficulté. Seul l'hôte change les réglages, les autres voient son choix |
+| **Boutique** | Le catalogue des chars, filtrable, avec le char examiné en 3D et ses jauges **comparées au char équipé** ; l'achat demande une confirmation |
+
+Échap revient d'une page ou d'une fenêtre à la précédente.
+
+L'hôte choisit la carte, chaque joueur choisit son char.
 
 | Carte | Particularité |
 | --- | --- |
@@ -167,9 +177,9 @@ Le solde ne descend jamais sous 0.
 
 ### Store
 
-Bouton **Store** en haut du salon (ou « Voir au Store » sous un char pas encore acheté). On y parcourt tous les
+Page **Boutique** du salon (ou « Voir à la boutique » sur la fiche d'un char pas encore acheté). On y parcourt tous les
 chars avec leur modèle 3D et leurs caractéristiques ; un char acheté est équipé aussitôt (l'achat demande une
-confirmation). Le Store est ouvert au salon, entre deux parties.
+confirmation). La boutique est ouverte au salon, entre deux parties.
 
 | Char | Rôle | Particularité | Prix |
 | --- | --- | --- | --- |
@@ -220,8 +230,13 @@ server/
 tools/
   campaign-check.js  vérifie les missions et les simule avec des bots (voir plus bas)
 client/
-  index.html, style.css
+  index.html       structure de tous les écrans
+  style.css        thème (couleurs, boutons, panneaux), HUD en jeu, menus en jeu
+  hub.css          le salon : hangar, opérations, boutique
   src/main.js      relie tout
+  src/ui/hub.js    le salon (3 pages) : ne connaît ni le réseau ni la 3D, main.js lui prête ce qu'il faut
+  src/ui/kit.js    briques d'interface : icônes, classes de chars, jauges de caractéristiques
+  src/ui/portraits.js  « photos » des modèles 3D de chars pour les cartes (suivent les modèles tout seuls)
   src/game.js      prédiction, réconciliation, interpolation
   src/renderer.js  scène 3D, caméra
   src/models/      modèles low-poly générés par code (chars, unités de campagne, décor et ambiances)
@@ -244,7 +259,8 @@ client/
 
 - **Nouveau char** : une entrée dans `TANK_TYPES` (`shared/constants.js`) + une fonction de modèle inscrite
   dans `TANK_MODELS` (`client/src/models/tank.js`) sous la même clé. Il apparaît alors dans le salon.
-  Pour le vendre au Store : `price: 150000` (sans prix, il est fourni à tous). Armes possibles :
+  Pour le vendre à la boutique : `price: 150000` (sans prix, il est fourni à tous). Sa carte, son portrait et sa classe
+  (léger, moyen, lourd, chasseur, artillerie : déduite de `armor`, `traverse` et `weapon`) apparaissent d'eux-mêmes au salon. Armes possibles :
   `burst: { shots, pause }` (rafales), `traverse` (canon en casemate, débattement en rad), `weapon: 'mortar'` (obusier,
   avec `minRange`, `maxRange`, `splash`, `flightBase`, `flightPerM`).
 - **Nouveau skin** : une entrée dans `SKINS` (`shared/skins.js`) avec ses couleurs et sa condition de

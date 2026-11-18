@@ -1,29 +1,23 @@
 // Chef d'orchestre du client : relie réseau, simulation, rendu, HUD et salon.
 import {
-  DT, TICK_RATE, TEAMS, TEAM_INFO, TANK_TYPES, UNIT_TYPES, DEFAULT_TANK, RULES, PICKUPS, DIFFICULTIES, tankStats, arcRange,
+  DT, TICK_RATE, TEAM_INFO, TANK_TYPES, UNIT_TYPES, DEFAULT_TANK, RULES, PICKUPS, DIFFICULTIES, arcRange,
 } from '/shared/constants.js';
-import { RANKS, rankInfo, tankOwned, tankPrice, fmtCr } from '/shared/progress.js';
+import { rankInfo, fmtCr } from '/shared/progress.js';
 import { MAPS, marchRay, pointBlocked, heightAt, inBush } from '/shared/map.js';
-import { MISSIONS, CHAPTERS, getMission } from '/shared/campaign.js';
+import { getMission } from '/shared/campaign.js';
 import { pointHitsTank, shellHeight, autoPitch } from '/shared/tank.js';
-import { SKINS, DEFAULT_SKIN, skinUnlocked, unlockedSkins } from '/shared/skins.js';
+import { SKINS, DEFAULT_SKIN, unlockedSkins } from '/shared/skins.js';
 import { Net } from './net.js';
 import { Input } from './input.js';
 import { Game } from './game.js';
 import { Renderer } from './renderer.js';
 import { Effects } from './effects.js';
 import { Sfx } from './audio.js';
-import { Hud, drawMapPreview } from './hud.js';
-import { CampaignMap, difficultyRows } from './campaignMap.js';
+import { Hud } from './hud.js';
+import { Hub } from './ui/hub.js';
+import { $, el, fmtInt, signed } from './ui/kit.js';
 import { Chat } from './chat.js';
 
-const $ = (id) => document.getElementById(id);
-const el = (tag, cls, text) => {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text !== undefined) e.textContent = text;
-  return e;
-};
 const unitDef = (type) => UNIT_TYPES[type] ?? TANK_TYPES[DEFAULT_TANK];
 const ROMAN = ['I', 'II', 'III', 'IV'];
 const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
@@ -43,16 +37,10 @@ let listener = { x: 0, z: 0 }; // position d'écoute (cible de la caméra)
 let views = new Map();
 let lost = false;
 let debriefAt = 0; // le rapport de mission s'affiche après un court temps (explosion finale)
-let skinFocus = null; // skin verrouillé sélectionné au salon : on lit sa condition, sans l'afficher sur le char (null = celui équipé)
 let newSkins = []; // skins débloqués pendant la mission en cours (annoncés au rapport)
-let tankFocus = null; // char regardé au salon (peut être verrouillé : on le voit, sans pouvoir le prendre)
 let lastReward = null; // dernières récompenses reçues (XP + crédits), affichées au rapport de mission
 const rewardsByReport = new Map(); // récompenses par rapport de bataille (escarmouche)
 let reportSeen = 0; // rapport de bataille déjà refermé
-let storeOpen = false; // Store affiché
-let storeFocus = null; // char regardé au Store
-let storeConfirm = false; // achat en attente de confirmation
-let storeNote = null; // { text, cls } : message sous le bouton d'achat
 let kicked = false; // exclu par l'hôte
 let menuOpen = false; // menu en jeu (Échap)
 let pickOpen = false; // choix d'équipe en cours de partie
@@ -101,46 +89,42 @@ const shotByWatched = (by) => by != null && by === (camId ?? game.myId);
 const DEBRIS = { crate: 0x8a6a42, tree: 0x5a7a3a, palm: 0x8a6a45, hedgehog: 0x45484c, column: 0xd6bf8e, wall: 0x9a9d9f, ruin: 0xd6bf8e };
 applyMap();
 
-// ------------------------------------------------------------------ salon
+// ------------------------------------------------------------ salon (hub)
 
 const screens = {
-  join: $('screen-join'), lobby: $('screen-lobby'), lost: $('screen-lost'), hud: $('hud'), debrief: $('screen-debrief'), map: $('screen-map'),
-  pick: $('screen-pick'), menu: $('screen-menu'), store: $('screen-store'), report: $('screen-report'),
+  join: $('screen-join'), lobby: $('screen-lobby'), lost: $('screen-lost'), hud: $('hud'), debrief: $('screen-debrief'),
+  pick: $('screen-pick'), menu: $('screen-menu'), report: $('screen-report'),
 };
-const MAP_KEYS = Object.keys(MAPS);
-const TANK_KEYS = Object.keys(TANK_TYPES);
-const SKIN_KEYS = Object.keys(SKINS);
-let shownMap = null;
-let shownMission = null;
-let mapOpen = false; // carte de campagne affichée
-let mapFocus = null; // mission détaillée dans le panneau de la carte
-const campaignMap = new CampaignMap($('cmap'), (id) => {
-  mapFocus = id;
-  refreshUI();
-});
 const myCleared = () => game.account?.cleared ?? {};
-const tankOpen = (type) => tankOwned(type, { tanks: game.account?.tanks ?? [] });
-// char exposé au salon : celui regardé, sinon celui équipé
-function shownTank() {
-  const equipped = game.me?.type ?? DEFAULT_TANK;
-  if (tankFocus === equipped) tankFocus = null;
-  return tankFocus ?? equipped;
-}
-const fmtInt = (n) => Math.round(n).toLocaleString('fr-FR');
-const signed = (n) => `${n < 0 ? '−' : '+'}${fmtInt(Math.abs(n))}`;
 
-// Jauges de caractéristiques d'un char (salon, Store).
-function statRows(def) {
-  return tankStats(def).map(([label, value, text]) => {
-    const row = el('div', 'stat');
-    const track = el('div', 'track');
-    const fill = el('div');
-    fill.style.width = `${Math.min(1, value) * 100}%`;
-    track.append(fill);
-    row.append(el('span', '', label), track, el('span', 'stat-value', text));
-    return row;
-  });
+// Exclusion d'un joueur (hôte) : il est déconnecté et ne peut pas revenir avant une minute.
+function kickPlayer(p) {
+  if (p.bot || confirm(`Exclure ${p.name} ? Il ne pourra pas revenir avant une minute.`)) net.send({ type: 'kick', id: p.id });
 }
+
+// Le hub (hangar, opérations, boutique) vit dans ui/hub.js. main.js lui prête le réseau et les règles d'équipe.
+const hub = new Hub({
+  game,
+  net,
+  isCampaign,
+  refresh: () => refreshUI(),
+  lanUrls: () => lanUrls,
+  logout: () => location.reload(), // on coupe la connexion (le compte se libère) et on revient à l'accueil
+  chooseTeam: (team) => chooseTeam(team),
+  canJoinTeam: () => canJoinTeam(),
+  inMatch: () => inMatch(),
+  nextGame: () => nextGame(),
+  kick: kickPlayer,
+  afterJoin: () => {
+    lobbyOpen = false; // en cours de partie : retour au jeu (en spectateur jusqu'à la partie suivante)
+    refreshUI();
+  },
+  backToGame: () => {
+    lobbyOpen = false;
+    refreshUI();
+  },
+});
+
 
 // Récompenses d'une partie ou d'une mission : crédits et XP, ligne par ligne.
 function renderRewards(box, rw) {
@@ -200,101 +184,7 @@ function renderReport() {
   }
 }
 
-// Store : parcourir tous les chars, acheter ceux qu'on n'a pas, équiper les autres.
-function openStore(type) {
-  storeOpen = true;
-  storeFocus = type ?? TANK_KEYS.find((k) => !tankOpen(k)) ?? shownTank();
-  storeConfirm = false;
-  storeNote = null;
-  refreshUI();
-}
-
-function renderStore() {
-  const credits = game.account?.credits ?? 0;
-  const equipped = game.me?.type ?? DEFAULT_TANK;
-  $('store-credits').textContent = fmtCr(credits);
-  $('store-items').replaceChildren(...TANK_KEYS.map((k) => {
-    const def = TANK_TYPES[k];
-    const owned = tankOpen(k), price = tankPrice(k);
-    const b = el('button', `st-item${k === storeFocus ? ' on' : ''}`);
-    b.append(el('b', '', def.name), el('small', '', def.role));
-    const tag = owned ? (k === equipped ? 'Équipé' : 'Possédé') : fmtCr(price);
-    b.append(el('span', `st-tag${owned ? ' owned' : credits < price ? ' short' : ''}`, tag));
-    b.addEventListener('click', () => {
-      storeFocus = k;
-      storeConfirm = false;
-      storeNote = null;
-      refreshUI();
-    });
-    return b;
-  }));
-  const type = storeFocus, def = TANK_TYPES[type];
-  const owned = tankOpen(type), price = tankPrice(type);
-  $('store-stage-name').textContent = def.name;
-  $('store-stage-role').textContent = def.role;
-  $('store-role').textContent = def.role;
-  $('store-name').textContent = def.name;
-  $('store-trait').textContent = def.trait ?? '';
-  $('store-trait').classList.toggle('hidden', !def.trait);
-  $('store-desc').textContent = def.desc;
-  $('store-stats').replaceChildren(...statRows(def));
-  $('store-price').textContent = owned ? (price ? 'Possédé' : 'Fourni') : fmtCr(price);
-  const action = $('store-action');
-  action.classList.toggle('confirm', storeConfirm);
-  $('store-cancel').classList.toggle('hidden', !storeConfirm);
-  let note = storeNote;
-  if (owned) {
-    action.textContent = type === equipped ? 'Équipé' : 'Équiper ce char';
-    action.disabled = type === equipped;
-  } else if (credits < price) {
-    action.textContent = `Acheter · ${fmtCr(price)}`;
-    action.disabled = true;
-    note ??= { text: `Il te manque ${fmtCr(price - credits)}.`, cls: 'bad' };
-  } else {
-    action.textContent = storeConfirm ? `Confirmer l’achat · ${fmtCr(price)}` : `Acheter · ${fmtCr(price)}`;
-    action.disabled = false;
-    if (storeConfirm) note ??= { text: `Solde après l’achat : ${fmtCr(credits - price)}`, cls: '' };
-  }
-  $('store-note').textContent = note?.text ?? '';
-  $('store-note').className = note?.cls ?? '';
-}
-const totalStars = (cleared) => MISSIONS.reduce((n, m) => n + (cleared[m.id] ?? 0), 0);
 const diffByStars = (n) => Object.values(DIFFICULTIES).find((d) => d.stars === n)?.name ?? '';
-
-// Bascule d'un choix à l'autre dans une liste (carte, char). Avec un seul choix, les flèches sont grisées.
-function cycle(keys, current, step) {
-  return keys[(keys.indexOf(current) + step + keys.length) % keys.length];
-}
-
-function renderSquad(team, isHost, running) {
-  const members = [...game.roster.values()].filter((p) => p.team === team && !p.unit);
-  const rows = members.map((p) => {
-    const li = el('li', p.id === game.myId ? 'me' : '');
-    li.append(el('span', 'nm', p.name));
-    if (p.rk != null) {
-      const rk = el('span', 'tg', RANKS[p.rk].short);
-      rk.title = RANKS[p.rk].name;
-      li.append(rk);
-    }
-    if (p.id === game.hostId) li.append(el('span', 'tg host', 'hôte'));
-    if (running && !p.im) li.append(el('span', 'tg', 'partie suivante'));
-    if (isHost && !p.bot && p.id !== game.myId) li.append(kickButton(p));
-    if (p.bot) {
-      li.append(el('span', 'tg', 'bot'));
-      if (isHost && !running) {
-        const rm = el('button', 'rm', '×');
-        rm.title = 'Retirer ce bot';
-        rm.addEventListener('click', () => net.send({ type: 'removeBot', id: p.id }));
-        li.append(rm);
-      }
-    }
-    return li;
-  });
-  if (!rows.length) rows.push(el('li', 'empty', 'Aucun équipage'));
-  $(`list-${team}`).replaceChildren(...rows);
-  $(`count-${team}`).textContent = `${members.length} / ${RULES.maxPlayersPerTeam}`;
-  return members.length;
-}
 
 // Bouton « Exclure » (hôte) : le joueur est déconnecté et ne peut pas revenir avant une minute.
 function kickButton(p) {
@@ -304,19 +194,6 @@ function kickButton(p) {
     if (p.bot || confirm(`Exclure ${p.name} ? Il ne pourra pas revenir avant une minute.`)) net.send({ type: 'kick', id: p.id });
   });
   return b;
-}
-
-// Joueurs sans équipe (spectateurs), avec bouton d'exclusion pour l'hôte.
-function renderSpectators(isHost) {
-  const rows = [...game.roster.values()].filter((p) => !p.team && !p.unit).map((p) => {
-    const li = el('li', p.id === game.myId ? 'me' : '');
-    li.append(el('span', 'nm', p.name));
-    if (p.id === game.hostId) li.append(el('span', 'tg host', 'hôte'));
-    if (isHost && p.id !== game.myId) li.append(kickButton(p));
-    return li;
-  });
-  if (!rows.length) rows.push(el('li', 'empty', 'Personne'));
-  $('spectators').replaceChildren(...rows);
 }
 
 const inRoundNow = () => game.phase !== 'lobby' && !!game.latest?.pl.has(game.myId);
@@ -390,55 +267,6 @@ function stars(n, max = 3) {
   return '★'.repeat(n) + '☆'.repeat(max - n);
 }
 
-// Carte « Opération » (campagne) : la mission choisie, en grand. Un clic ouvre la carte de campagne pour en choisir une autre.
-function renderMissionCard(mission, isHost, running) {
-  const cleared = myCleared();
-  const idx = MISSIONS.indexOf(mission);
-  const got = cleared[mission.id] ?? 0;
-  $('mc-chapter').textContent = `Chapitre ${ROMAN[mission.chapter]} · ${CHAPTERS[mission.chapter]} · Mission ${idx + 1}`;
-  $('mc-name').textContent = mission.name;
-  $('mc-stars').replaceChildren(...[0, 1, 2].map((i) => el('i', i < got ? 'on' : '', '★')));
-  if (mission.boss) $('mc-stars').append(el('em', 'boss-tag', `Boss · ${UNIT_TYPES[mission.boss].name}`));
-  $('mc-brief').textContent = mission.brief;
-  $('mc-obj').textContent = mission.objective.label;
-  $('mc-change').textContent = isHost && !running ? 'Changer de mission' : 'Voir la carte de campagne';
-  const done = MISSIONS.filter((m) => cleared[m.id]).length;
-  $('mission-count').textContent = `${done} / ${MISSIONS.length} réussies`;
-}
-
-// Carte de campagne : mes étoiles, missions ouvertes à l'escouade, détail de la mission pointée.
-function renderCampaignMap(isHost, running) {
-  const cleared = myCleared(), unlocked = game.unlocked;
-  if (!mapFocus) mapFocus = game.settings.mission;
-  campaignMap.render({ cleared, unlocked, selected: game.settings.mission, focus: mapFocus });
-  const total = totalStars(cleared), max = MISSIONS.length * 3;
-  $('cmap-eyebrow').textContent = `Carte de campagne · ${game.account?.name ?? ''}`;
-  $('cmap-total').replaceChildren(el('b', '', `${total}`), el('span', '', ` / ${max} ★`),
-    el('small', '', `${MISSIONS.filter((m) => cleared[m.id]).length} missions réussies sur ${MISSIONS.length}`));
-
-  const m = getMission(mapFocus);
-  const idx = MISSIONS.indexOf(m);
-  const open = unlocked.includes(m.id);
-  const stars = cleared[m.id] ?? 0;
-  $('cs-chapter').textContent = `Chapitre ${ROMAN[m.chapter]} · ${CHAPTERS[m.chapter]} · Mission ${idx + 1}`;
-  $('cs-name').textContent = m.name;
-  $('cs-stars').replaceChildren(...[0, 1, 2].map((i) => el('span', i < stars ? 'on' : '', '★')));
-  $('cs-brief').textContent = open ? m.brief : 'Mission verrouillée : réussis la mission précédente (à n’importe quelle difficulté) pour l’ouvrir.';
-  $('cs-obj').textContent = open ? `Objectif : ${m.objective.label}${m.boss ? ` · Boss : ${UNIT_TYPES[m.boss].name}` : ''}` : '';
-  $('cs-diffs').replaceChildren(...difficultyRows(stars).map((r) => {
-    const row = el('div', r.done ? 'done' : '');
-    row.append(el('span', 'cs-s', '★'.repeat(r.need)), el('span', '', r.name), el('b', '', r.done ? 'Réussie' : '—'));
-    return row;
-  }));
-  const byMate = open && !stars && idx > 0 && !cleared[MISSIONS[idx - 1].id];
-  $('cs-note').textContent = byMate ? 'Ouverte grâce à un équipier : réussis-la pour l’ajouter à ta progression.'
-    : m.id === game.settings.mission ? 'Mission actuellement choisie pour l’escouade.' : '';
-  const pick = $('cs-pick');
-  pick.classList.toggle('hidden', !isHost);
-  pick.disabled = running || !open || m.id === game.settings.mission;
-  pick.textContent = m.id === game.settings.mission ? 'Mission choisie' : open ? 'Choisir cette mission' : 'Verrouillée';
-}
-
 function renderDebrief(isHost) {
   const d = game.debrief;
   if (!d) return;
@@ -487,41 +315,8 @@ function renderDebrief(isHost) {
   $('db-wait').textContent = isHost ? (d.success && !d.next ? 'Campagne terminée. Bravo, commandant !' : '') : `En attente de ${hostName}…`;
 }
 
-// Skins : une pastille par skin. Débloqué → clic pour l'équiper ; verrouillé → on lit son nom et sa condition
-// de déblocage, mais le char exposé garde le skin équipé (pas d'aperçu : il faut le mériter).
-function renderSkins(me) {
-  const cleared = myCleared();
-  const equipped = me.skin ?? DEFAULT_SKIN;
-  if (skinFocus === equipped) skinFocus = null;
-  const shown = skinFocus ?? equipped;
-  $('skin-list').replaceChildren(...SKIN_KEYS.map((id) => {
-    const skin = SKINS[id];
-    const open = skinUnlocked(id, cleared);
-    const b = el('button', `swatch${id === equipped ? ' on' : ''}${id === shown ? ' focus' : ''}${open ? '' : ' locked'}`);
-    if (skin.hull != null) b.style.setProperty('--sw', skin.swatch ?? `#${skin.hull.toString(16).padStart(6, '0')}`);
-    if (skin.hull == null) b.classList.add('team');
-    if (skin.legend) b.classList.add('legend');
-    b.title = open ? skin.name : `${skin.name} · verrouillé`;
-    b.setAttribute('aria-label', b.title);
-    b.addEventListener('click', () => {
-      if (open) {
-        skinFocus = null;
-        net.send({ type: 'skin', skin: id });
-      } else {
-        skinFocus = id === skinFocus ? null : id;
-      }
-      refreshUI();
-    });
-    return b;
-  }));
-  const skin = SKINS[shown];
-  const open = skinUnlocked(shown, cleared);
-  $('skin-count').textContent = `${unlockedSkins(cleared).length} / ${SKIN_KEYS.length}`;
-  $('skin-name').textContent = skin.name + (open ? (shown === equipped ? ' · équipé' : '') : ' · verrouillé');
-  $('skin-name').classList.toggle('locked', !open);
-  $('skin-name').classList.toggle('legend', !!skin.legend);
-  $('skin-desc').textContent = open ? skin.desc : `Pour le débloquer : ${skin.hint ?? '?'}`;
-}
+// Rapport de bataille à afficher ? (au retour au salon, pour les joueurs de la partie, jusqu'à ce qu'ils le referment)
+const reportShown = () => game.phase === 'lobby' && !!game.report && game.report.id !== reportSeen && game.report.players.some((p) => p.id === game.myId);
 
 function refreshUI() {
   const me = game.me;
@@ -532,28 +327,23 @@ function refreshUI() {
   const inGame = !!me && !inLobby;
   const debrief = inGame && game.phase === 'debrief' && performance.now() >= debriefAt;
   if (debrief) menuOpen = pickOpen = false;
+  const report = inLobby && reportShown();
   screens.join.classList.toggle('hidden', !!me || lost);
   screens.lobby.classList.toggle('hidden', !inLobby || lost);
   screens.hud.classList.toggle('hidden', !inGame || debrief || lost);
   screens.debrief.classList.toggle('hidden', !debrief || lost);
   screens.pick.classList.toggle('hidden', !inGame || !pickOpen || lost);
-  // rapport de bataille : au retour au salon, pour les joueurs de la partie, jusqu'à ce qu'ils le referment
-  const report = game.phase === 'lobby' && !!game.report && game.report.id !== reportSeen && game.report.players.some((p) => p.id === game.myId);
-  if (report || game.phase !== 'lobby' || !inLobby) storeOpen = false;
-  screens.report.classList.toggle('hidden', !inLobby || !report || lost);
-  screens.store.classList.toggle('hidden', !inLobby || !storeOpen || lost);
-  if (storeOpen) screens.lobby.classList.add('hidden'); // le Store remplace le salon (le char exposé reste au centre)
+  screens.report.classList.toggle('hidden', !report || lost);
   screens.menu.classList.toggle('hidden', !inGame || !menuOpen || pickOpen || lost);
   if (lost) {
     $('lost-eyebrow').textContent = kicked ? 'Exclusion' : 'Liaison interrompue';
     $('lost-title').textContent = kicked ? 'Exclu de la partie' : 'Connexion perdue';
     $('lost-text').textContent = kicked ? 'L’hôte t’a retiré de la partie. Tu pourras revenir dans une minute.' : 'Le serveur ne répond plus. Vérifie qu’il est toujours lancé.';
   }
-  if (!inLobby || !campaign || game.phase !== 'lobby') mapOpen = false;
-  screens.map.classList.toggle('hidden', !mapOpen || lost);
   screens.lost.classList.toggle('hidden', !lost);
   document.body.classList.toggle('mode-campaign', campaign);
   document.body.classList.toggle('mode-skirmish', !campaign);
+  document.body.classList.toggle('in-hub', inLobby && !lost);
   hudActive = inGame && !debrief && !lost;
   input.enabled = hudActive && !menuOpen && !pickOpen && !game.paused;
   $('pause-banner').classList.toggle('hidden', !game.paused || !hudActive);
@@ -562,121 +352,15 @@ function refreshUI() {
   applyMap();
   hud.setCampaignMode(campaign);
   if (!me) return;
+  if (!inLobby) hub.reset();
 
   const isHost = game.hostId === game.myId;
-  const running = game.phase !== 'lobby';
   if (debrief) renderDebrief(isHost);
   if (report) renderReport();
-  if (storeOpen) renderStore();
   if (pickOpen) renderPick();
   if (menuOpen) renderMenu(isHost);
   $('pause-sub').textContent = isHost ? 'P › Reprendre la partie' : `Partie mise en pause par ${game.roster.get(game.hostId)?.name ?? 'l’hôte'}`;
-
-  // --- équipes (en campagne : une seule escouade)
-  let total = 0;
-  for (const team of TEAMS) {
-    const n = renderSquad(team, isHost, running);
-    total += n;
-    const full = n >= RULES.maxPlayersPerTeam;
-    const squad = document.querySelector(`.squad.${team}`);
-    squad.classList.toggle('hidden', campaign && team === 'red');
-    squad.classList.toggle('campaign', campaign);
-    squad.querySelector('.squad-head span').textContent = campaign ? 'Escouade' : TEAM_INFO[team].label;
-    const join = document.querySelector(`.join-team[data-team=${team}]`);
-    join.disabled = me.team === team || full || !canJoinTeam();
-    if (running && !inMatch()) join.textContent = me.team === team ? 'Ton équipe (suivante)' : 'Pour la suivante';
-    join.textContent = me.team === team ? 'Ton équipe' : campaign ? 'Rejoindre l’escouade' : 'Rejoindre';
-    const bot = document.querySelector(`.add-bot[data-team=${team}]`);
-    bot.classList.toggle('hidden', !isHost || running);
-    bot.textContent = campaign ? '+ Bot allié' : '+ Bot';
-    bot.disabled = full;
-  }
-  renderSpectators(isHost);
-  $('btn-spectate').disabled = !me.team;
-  $('btn-back-game').classList.toggle('hidden', !running);
-
-  if (game.account) {
-    $('account-name').textContent = game.account.name;
-    $('account-stars').textContent = `${totalStars(myCleared())} / ${MISSIONS.length * 3} ★`;
-    const r = rankInfo(game.account.xp);
-    $('account-rank').textContent = r.next ? `${r.rank.name} · ${fmtInt(game.account.xp)} / ${fmtInt(r.next.xp)} XP` : `${r.rank.name} · ${fmtInt(game.account.xp)} XP`;
-    $('account-xp').style.width = `${r.progress * 100}%`;
-    $('account-xp').parentElement.title = r.next ? `Prochain grade : ${r.next.name}` : 'Grade maximal';
-    $('account-credits').textContent = fmtCr(game.account.credits);
-    $('btn-store').disabled = running;
-    $('btn-store').title = running ? 'Le Store ouvre au salon, entre deux parties' : 'Acheter des chars avec tes crédits';
-  }
-
-  const info = $('lobby-info');
-  info.replaceChildren(lanUrls.length ? 'Adresse du salon' : 'Aucune adresse réseau détectée');
-  if (lanUrls.length) info.append(el('b', '', lanUrls[0].replace('http://', '')));
-
-  // --- mode
-  for (const btn of $('mode').children) {
-    btn.classList.toggle('on', btn.dataset.v === game.settings.mode);
-    btn.disabled = !isHost || running;
-  }
-
-  // --- carte (escarmouche) ou mission (campagne), choisie par l'hôte
-  const map = game.map;
-  if (!campaign && shownMap !== map) {
-    shownMap = map;
-    drawMapPreview($('map-preview'), map, 300);
-  }
-  $('map-name').textContent = map.name;
-  $('map-desc').textContent = map.desc;
-  $('map-count').textContent = `${MAP_KEYS.indexOf(game.settings.map) + 1} / ${MAP_KEYS.length}`;
-  $('map-prev').disabled = $('map-next').disabled = !isHost || running || MAP_KEYS.length < 2;
-
-  const mission = getMission(game.settings.mission);
-  if (campaign) {
-    if (shownMission !== mission) {
-      shownMission = mission;
-      drawMapPreview($('mission-preview'), mission.map, 300, mission);
-    }
-    renderMissionCard(mission, isHost, running);
-    if (mapOpen) renderCampaignMap(isHost, running);
-    for (const btn of $('difficulty').children) {
-      btn.classList.toggle('on', btn.dataset.v === game.settings.difficulty);
-      btn.disabled = !isHost || running;
-    }
-  }
-
-  // --- char (chacun le sien)
-  const type = shownTank();
-  const def = TANK_TYPES[type];
-  const tankFree = tankOpen(type);
-  $('tank-desc').textContent = def.desc;
-  $('tank-trait').textContent = def.trait ?? '';
-  $('tank-trait').classList.toggle('hidden', !def.trait);
-  $('tank-count').textContent = `${TANK_KEYS.indexOf(type) + 1} / ${TANK_KEYS.length} · ${TANK_KEYS.filter(tankOpen).length} possédés`;
-  $('tank-lock-text').textContent = tankFree ? '' : `À acheter · ${fmtCr(tankPrice(type))}`;
-  $('tank-lock').classList.toggle('hidden', tankFree);
-  $('plate-name').classList.toggle('locked', !tankFree);
-  $('tank-prev').disabled = $('tank-next').disabled = TANK_KEYS.length < 2;
-  $('tank-stats').replaceChildren(...statRows(def));
-
-  renderSkins(me);
-
-  // --- bandeau central : le char choisi
-  $('plate-name').textContent = def.name;
-  $('plate-role').textContent = def.role;
-
-  // --- partie
-  for (const btn of $('rounds').children) {
-    btn.classList.toggle('on', Number(btn.dataset.v) === game.settings.roundsToWin);
-    btn.disabled = !isHost || running;
-  }
-  $('btn-start').classList.toggle('hidden', !isHost || running);
-  $('btn-start').textContent = campaign ? 'Lancer la mission' : 'Lancer la partie';
-  $('btn-start').disabled = total === 0;
-  const hostName = game.roster.get(game.hostId)?.name ?? '?';
-  $('lobby-hint').textContent = running
-    ? (inMatch() ? `${campaign ? 'Mission' : 'Partie'} en cours : les équipes sont figées jusqu’à la fin.`
-      : `${campaign ? 'Mission' : 'Partie'} en cours : tu la regardes en spectateur. Choisis ton équipe pour la ${nextGame()}.`)
-    : isHost
-      ? (campaign ? (me.team ? 'Escouade prête : vérifie la difficulté et lance.' : 'Rejoins l’escouade pour lancer la mission.') : 'Seul ? Rejoins une équipe, ajoute des bots en face et lance.')
-      : `En attente du lancement par ${hostName}…`;
+  if (inLobby && !lost) hub.render();
 
   hud.setScore(game.score);
   hud.setRound(game.round, game.settings.roundsToWin);
@@ -700,70 +384,21 @@ $('join-form').addEventListener('submit', async (e) => {
   }
 });
 // changer de compte : on coupe la connexion (le compte se libère) et on revient à l'accueil
-$('btn-logout').addEventListener('click', () => location.reload());
-$('btn-store').addEventListener('click', () => openStore());
-$('tank-to-store').addEventListener('click', () => openStore(shownTank()));
-$('store-close').addEventListener('click', () => {
-  storeOpen = false;
-  refreshUI();
-});
-$('store-cancel').addEventListener('click', () => {
-  storeConfirm = false;
-  refreshUI();
-});
-$('store-action').addEventListener('click', () => {
-  const type = storeFocus;
-  if (tankOpen(type)) {
-    // déjà possédé : on l'équipe
-    tankFocus = type;
-    net.send({ type: 'tank', tank: type });
-    storeNote = { text: `${TANK_TYPES[type].name} équipé.`, cls: 'good' };
-  } else if (!storeConfirm) {
-    storeConfirm = true; // premier clic : on demande confirmation
-    storeNote = null;
-  } else {
-    net.send({ type: 'buy', tank: type });
-    storeNote = { text: 'Achat en cours…', cls: '' };
-  }
-  refreshUI();
-});
 $('rp-close').addEventListener('click', () => {
   reportSeen = game.report?.id ?? reportSeen;
-  refreshUI();
-});
-$('mission-card').addEventListener('click', () => {
-  mapOpen = true;
-  mapFocus = game.settings.mission;
-  refreshUI();
-});
-$('cmap-close').addEventListener('click', () => {
-  mapOpen = false;
-  refreshUI();
-});
-$('cs-pick').addEventListener('click', () => {
-  net.send({ type: 'settings', mission: mapFocus });
-  mapOpen = false;
   refreshUI();
 });
 addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || lost || !game.me) return;
   if (bigMapOpen) setBigMap(false);
-  else if (mapOpen) mapOpen = false;
-  else if (storeOpen) storeOpen = false;
-  else if (game.report && game.phase === 'lobby' && reportSeen !== game.report.id) reportSeen = game.report.id;
+  else if (reportShown()) reportSeen = game.report.id;
+  else if ((game.phase === 'lobby' || lobbyOpen) && hub.back()) { /* fenêtre ou page du hub refermée */ }
   else if (game.phase === 'lobby') return;
   else if (lobbyOpen) lobbyOpen = false;
   else if (pickOpen) pickOpen = false;
   else if (game.phase !== 'debrief' || performance.now() < debriefAt) menuOpen = !menuOpen;
   refreshUI();
 });
-for (const btn of document.querySelectorAll('.join-team')) {
-  btn.addEventListener('click', () => {
-    if (!chooseTeam(btn.dataset.team)) return;
-    lobbyOpen = false; // en cours de partie : retour au jeu (en spectateur jusqu'à la partie suivante)
-    refreshUI();
-  });
-}
 for (const btn of document.querySelectorAll('.pick-team')) {
   btn.addEventListener('click', () => {
     if (!chooseTeam(btn.dataset.team)) return;
@@ -771,11 +406,6 @@ for (const btn of document.querySelectorAll('.pick-team')) {
     refreshUI();
   });
 }
-$('btn-spectate').addEventListener('click', () => chooseTeam(null));
-$('btn-back-game').addEventListener('click', () => {
-  lobbyOpen = false;
-  refreshUI();
-});
 $('pick-spectate').addEventListener('click', () => {
   if (!chooseTeam(null)) return;
   pickOpen = false;
@@ -817,22 +447,6 @@ $('menu-abort').addEventListener('click', () => {
   net.send({ type: 'abort' });
 });
 $('menu-logout').addEventListener('click', () => location.reload());
-for (const btn of document.querySelectorAll('.add-bot')) btn.addEventListener('click', () => net.send({ type: 'addBot', team: btn.dataset.team }));
-for (const btn of $('rounds').children) btn.addEventListener('click', () => net.send({ type: 'settings', roundsToWin: Number(btn.dataset.v) }));
-for (const btn of $('mode').children) btn.addEventListener('click', () => net.send({ type: 'settings', mode: btn.dataset.v }));
-for (const btn of $('difficulty').children) btn.addEventListener('click', () => net.send({ type: 'settings', difficulty: btn.dataset.v }));
-$('map-prev').addEventListener('click', () => net.send({ type: 'settings', map: cycle(MAP_KEYS, game.settings.map, -1) }));
-$('map-next').addEventListener('click', () => net.send({ type: 'settings', map: cycle(MAP_KEYS, game.settings.map, 1) }));
-// On parcourt tous les chars ; un char débloqué est équipé tout de suite, un char verrouillé est seulement exposé.
-function browseTank(step) {
-  if (!game.me) return;
-  tankFocus = cycle(TANK_KEYS, shownTank(), step);
-  if (tankOpen(tankFocus)) net.send({ type: 'tank', tank: tankFocus });
-  refreshUI();
-}
-$('tank-prev').addEventListener('click', () => browseTank(-1));
-$('tank-next').addEventListener('click', () => browseTank(1));
-$('btn-start').addEventListener('click', () => net.send({ type: 'start' }));
 $('db-next').addEventListener('click', () => net.send({ type: 'debrief', action: 'next' }));
 $('db-retry').addEventListener('click', () => net.send({ type: 'debrief', action: 'retry' }));
 $('db-lobby').addEventListener('click', () => net.send({ type: 'debrief', action: 'lobby' }));
@@ -874,15 +488,12 @@ net.on('reward', (msg) => {
   refreshUI();
 });
 net.on('bought', (msg) => {
-  storeConfirm = false;
-  storeNote = { text: `${TANK_TYPES[msg.tank].name} acheté et équipé !`, cls: 'good' };
-  tankFocus = null;
+  hub.onBought(msg);
   sfx.beep(true);
   refreshUI();
 });
 net.on('buyError', (msg) => {
-  storeConfirm = false;
-  storeNote = { text: msg.error, cls: 'bad' };
+  hub.onBuyError(msg);
   refreshUI();
 });
 net.on('state', (msg) => {
@@ -1314,6 +925,53 @@ renderer.gl.domElement.addEventListener('wheel', (e) => {
   if (spec.free && specControls()) spec.y = Math.max(2, Math.min(160, spec.y - e.deltaY * 0.03));
 }, { passive: true });
 
+// ------------------------------------------------------- scène du hub
+// Au hangar et à la boutique, des panneaux couvrent les bords de l'écran : on décale l'image pour que le char
+// se retrouve au milieu de l'espace libre (le glissement est progressif quand on change de page).
+const stage = { l: 0, r: 0, t: 0, b: 0, z: 1 };
+let garageSpin = 0; // le char se fait tourner à la souris (décalage ajouté au temps de la caméra du salon)
+let garageDrag = null;
+
+function frameStage(on, dt) {
+  const target = on ? hub.insets() : { l: 0, r: 0, t: 0, b: 0, z: 1 };
+  const goalZoom = on ? Math.max(0.7, Math.min(0.95, (innerHeight - target.t - target.b) / (innerHeight * 0.45))) : 1;
+  const k = on ? 1 - Math.exp(-dt * 9) : 1; // hors du hub : retour immédiat à la vue normale
+  for (const key of ['l', 'r', 't', 'b']) {
+    const d = target[key] - stage[key];
+    stage[key] = Math.abs(d) < 0.4 ? target[key] : stage[key] + d * k;
+  }
+  stage.z += (goalZoom - stage.z) * k;
+  const cam = renderer.camera;
+  if (on) {
+    // la caméra du salon vise un peu sous le char : on redescend l'image d'autant
+    const lift = innerHeight * 0.07;
+    cam.zoom = stage.z;
+    cam.setViewOffset(innerWidth, innerHeight, -(stage.l - stage.r) / 2, -(stage.t - stage.b) / 2 - lift, innerWidth, innerHeight);
+  } else if (cam.view?.enabled || cam.zoom !== 1) {
+    cam.zoom = 1;
+    cam.clearViewOffset();
+  }
+}
+
+const inGarage = () => !!game.me && game.phase === 'lobby' && !lost;
+renderer.gl.domElement.addEventListener('pointerdown', (e) => {
+  if (!inGarage()) return;
+  garageDrag = { x: e.clientX, id: e.pointerId };
+  renderer.gl.domElement.setPointerCapture(e.pointerId);
+  document.body.classList.add('dragging');
+});
+renderer.gl.domElement.addEventListener('pointermove', (e) => {
+  if (!garageDrag) return;
+  garageSpin -= ((e.clientX - garageDrag.x) * 0.009) / 0.22; // 0,22 rad/s : vitesse de rotation de garageCamera
+  garageDrag.x = e.clientX;
+});
+const endGarageDrag = () => {
+  garageDrag = null;
+  document.body.classList.remove('dragging');
+};
+renderer.gl.domElement.addEventListener('pointerup', endGarageDrag);
+renderer.gl.domElement.addEventListener('pointercancel', endGarageDrag);
+
 // Déplacement de la caméra libre (ZQSD au sol, Espace / C en hauteur, Maj pour aller vite).
 function moveFreeCam(dt) {
   if (!specControls()) return;
@@ -1386,7 +1044,7 @@ function frame(now) {
   // 3. Caméra (et char d'exposition quand on est au salon)
   const me = game.me;
   const garage = !!me && game.phase === 'lobby';
-  renderer.setShowcase(garage ? (storeOpen ? storeFocus : shownTank()) : null, garage ? me.team : null, garage ? me.skin ?? DEFAULT_SKIN : null);
+  renderer.setShowcase(garage ? hub.showcaseType() : null, garage ? me.team : null, garage ? me.skin ?? DEFAULT_SKIN : null);
   const target = cameraTarget();
   if (target) {
     renderer.followCamera(target.x, target.z, target.ty, dt, camId !== target.id);
@@ -1396,11 +1054,12 @@ function frame(now) {
     renderer.freeCamera(spec.x, spec.y, spec.z, spec.yaw, spec.pitch);
     listener = { x: spec.x, z: spec.z };
   } else if (garage) {
-    renderer.garageCamera(time);
+    renderer.garageCamera(time + garageSpin);
   } else {
     renderer.orbitCamera(time);
   }
   camId = target ? target.id : null;
+  frameStage(garage && !lost, dt);
 
   // 4. Effets
   if (!game.paused) fx.update(dt); // en pause, les obus restent figés comme sur le serveur
