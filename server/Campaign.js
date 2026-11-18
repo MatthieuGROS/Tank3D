@@ -283,7 +283,7 @@ export class Campaign {
         const a = rand(0, Math.PI * 2), d = k === 0 ? rand(0, 3) : rand(4, 10);
         const x = p.tank.x + Math.sin(p.tank.yaw) * p.tank.speed * 1.4 + Math.cos(a) * d;
         const z = p.tank.z + Math.cos(p.tank.yaw) * p.tank.speed * 1.4 + Math.sin(a) * d;
-        room.later((i * perTarget + k) * 7, () => boss.alive && room.fireArc(boss, x, z, { damage: 30, splash: 6, flight: 100 }));
+        room.later((i * perTarget + k) * 7, () => boss.alive && room.fireArc(boss, x, z, { damage: 300, splash: 6, flight: 100 }));
       }
     });
   }

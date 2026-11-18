@@ -4,7 +4,7 @@
 // (missions contre l'IA, pilotées par server/Campaign.js).
 import {
   TICK_MS, DT, TICK_RATE, SNAPSHOT_INTERVAL, TEAMS, TANK_TYPES, UNIT_TYPES, DEFAULT_TANK, RULES,
-  DIFFICULTIES, CAMPAIGN_RULES, arcRange, arcFlight,
+  DIFFICULTIES, CAMPAIGN_RULES, arcRange, arcFlight, faceCoef,
 } from '../shared/constants.js';
 import {
   rankIndex, RANKS, tankOwned, ownedTanks, tankPrice, fmtCr, skirmishXp, missionXp, skirmishCredits, missionCredits, sumParts,
@@ -986,12 +986,13 @@ export class Room {
     this.events.push({ k: 'boom', id: s.id, x: +s.x.toFixed(2), y: +s.y.toFixed(2), z: +s.z.toFixed(2), hit: victim ? victim.id : null, r: s.splash });
     if (this.phase !== 'playing') return;
     const canHurt = (p) => p.alive && p.id !== s.owner && (RULES.friendlyFire || p.team !== s.team);
-    if (victim && canHurt(victim)) this.damage(victim, s.damage, s.owner);
+    // direct : la face touchée dépend de la direction de l'obus ; souffle : de la direction explosion → char
+    if (victim && canHurt(victim)) this.damage(victim, s.damage * faceCoef(this.defOf(victim), victim.tank.yaw, s.dx, s.dz), s.owner);
     if (!s.splash) return;
     for (const p of this.roundPlayers()) {
       if (p === victim || !canHurt(p)) continue;
       const d = Math.max(0, Math.hypot(p.tank.x - s.x, p.tank.z - s.z) - this.defOf(p).radius * 0.5);
-      if (d < s.splash) this.damage(p, s.splashDamage * (1 - d / s.splash), s.owner);
+      if (d < s.splash) this.damage(p, s.splashDamage * (1 - d / s.splash) * faceCoef(this.defOf(p), p.tank.yaw, p.tank.x - s.x, p.tank.z - s.z), s.owner);
     }
   }
 

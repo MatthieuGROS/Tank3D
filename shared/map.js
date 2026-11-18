@@ -59,7 +59,7 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 // ------------------------------------------------------------ décor destructible
 // Objets qu'un obus peut détruire, avec leurs points de structure. Les autres (bâtiments, rochers,
 // plateaux, eau, dunes, bunkers, pipelines…) sont indestructibles.
-export const DESTRUCTIBLE = { crate: 60, tree: 35, palm: 35, hedgehog: 90, column: 110, wall: 140, ruin: 160 };
+export const DESTRUCTIBLE = { crate: 600, tree: 350, palm: 350, hedgehog: 900, column: 1100, wall: 1400, ruin: 1600 };
 
 // Identifiant stable d'un objet de la carte d'origine : 'b3' (4e boîte) ou 'c7' (8e disque).
 export function objectKey(baseMap, o) {
