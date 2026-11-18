@@ -1,0 +1,6 @@
+node_modules/
+campaign-save.json
+accounts.json
+accounts.json.tmp
+accounts.backup*.json
+.claude/

@@ -1,0 +1,14 @@
+{
+  "name": "tank3d",
+  "version": "0.1.0",
+  "description": "Jeu de tanks 3D multijoueur en réseau local",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "three": "^0.170.0",
+    "ws": "^8.18.0"
+  }
+}

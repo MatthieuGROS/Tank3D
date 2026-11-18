@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tank 3D</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">{ "imports": { "three": "/vendor/three/three.module.js" } }</script>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- ===================== Interface en jeu ===================== -->
+  <div id="hud" class="hidden">
+    <div id="scorebar">
+      <div class="sb-team red"><div class="pips" id="alive-red"></div><div class="sb-score" id="score-red">0</div></div>
+      <div class="sb-mid"><div id="timer">3:00</div><div id="round-label">Manche 1</div></div>
+      <div class="sb-team blue"><div class="sb-score" id="score-blue">0</div><div class="pips" id="alive-blue"></div></div>
+    </div>
+
+    <div id="mission" class="hidden">
+      <div class="m-head"><span id="m-name"></span><span id="m-time">0:00</span></div>
+      <div class="m-obj"><span id="m-obj"></span><b id="m-val"></b></div>
+      <div class="track"><div id="m-fill"></div></div>
+      <div class="m-lives"><span>Escouade</span><div id="m-lives"></div></div>
+    </div>
+    <div id="bossbar" class="hidden">
+      <div class="b-head"><span id="boss-name"></span><span id="boss-hp"></span></div>
+      <div class="b-track"><div id="boss-fill"></div></div>
+    </div>
+    <div id="toasts"></div>
+
+    <div id="cap" class="hidden">
+      <div id="cap-label"></div>
+      <div class="track"><div id="cap-fill"></div></div>
+    </div>
+
+    <div id="announce"><div id="announce-main"></div><div id="announce-sub"></div></div>
+    <div id="killfeed"></div>
+    <div id="tags"></div>
+    <div id="marks"></div>
+    <div id="dmgnums"></div>
+    <div id="gunmark"><i></i></div>
+    <div id="hitmarker"></div>
+    <div id="lowhp"></div>
+    <div id="vignette"></div>
+
+    <div id="buffs"></div>
+    <div id="status">
+      <div class="st-head"><span id="tank-name">Vanguard</span><span id="hp-text">100</span></div>
+      <div class="seg"><div id="hp-fill"></div></div>
+      <div class="st-reload"><span>Canon</span><div class="track"><div id="reload-fill"></div></div><span id="reload-text">Prêt</span></div>
+    </div>
+
+    <div id="spectate" class="hidden"></div>
+    <div id="mapbox"><canvas id="minimap"></canvas></div>
+    <div id="netinfo"></div>
+    <div id="help"><kbd>Z</kbd><kbd>Q</kbd><kbd>S</kbd><kbd>D</kbd> piloter <kbd>←</kbd><kbd>→</kbd> tourelle <kbd>Espace</kbd> feu <span id="help-range" class="hidden"><kbd>A</kbd><kbd>E</kbd> portée </span><kbd>Tab</kbd> scores <kbd>T</kbd> signaler <kbd>M</kbd> carte <kbd>Entrée</kbd> chat</div>
+    <div id="scoreboard" class="hidden"></div>
+    <button id="btn-menu" class="btn ghost">Menu <kbd>Échap</kbd></button>
+    <div id="pause-banner" class="hidden"><b>Pause</b><span id="pause-sub">Partie mise en pause par l'hôte</span></div>
+  </div>
+
+  <!-- ===================== Carte en grand (M) ===================== -->
+  <div id="bigmap" class="hidden">
+    <div class="bm-panel">
+      <div class="bm-head"><span>Carte du terrain</span><small><b>Clic</b> signaler un point · <b>clic sur un ennemi</b> le cibler · <kbd>M</kbd> fermer</small></div>
+      <canvas id="bigmap-canvas"></canvas>
+    </div>
+  </div>
+
+  <!-- ===================== Chat (Entrée) ===================== -->
+  <div id="chat" class="hidden">
+    <div id="chat-log"></div>
+    <form id="chat-form" class="hidden" autocomplete="off"><span>Tous</span><input id="chat-input" maxlength="140" spellcheck="false" placeholder="Message… (Entrée pour envoyer, Échap pour annuler)"></form>
+  </div>
+
+  <!-- ===================== Choix d'équipe en cours de partie ===================== -->
+  <section id="screen-pick" class="screen overlay hidden">
+    <div class="panel">
+      <div class="eyebrow" id="pick-eyebrow">Partie en cours</div>
+      <h2 id="pick-title">Rejoindre la partie</h2>
+      <p class="panel-text" id="pick-text"></p>
+      <div class="pick-teams">
+        <button class="btn pick-team red" data-team="red"></button>
+        <button class="btn pick-team blue" data-team="blue"></button>
+      </div>
+      <button class="btn" id="pick-spectate">Rester spectateur</button>
+      <button class="btn ghost" id="pick-lobby">Choisir mon char et mon skin</button>
+    </div>
+  </section>
+
+  <!-- ===================== Menu en jeu (Échap) ===================== -->
+  <section id="screen-menu" class="screen overlay hidden">
+    <div class="panel">
+      <div class="eyebrow" id="menu-eyebrow">Menu</div>
+      <h2 id="menu-title">Partie en cours</h2>
+      <button class="btn primary" id="menu-resume">Reprendre</button>
+      <button class="btn" id="menu-team">Changer d'équipe</button>
+      <button class="btn" id="menu-spectate">Passer en spectateur</button>
+      <button class="btn ghost" id="menu-lobby">Char et skin</button>
+      <div id="menu-host">
+        <div class="menu-sep">Hôte</div>
+        <button class="btn" id="menu-pause">Mettre en pause</button>
+        <button class="btn" id="menu-abort">Terminer la partie</button>
+        <div class="menu-sep">Joueurs</div>
+        <ul id="menu-players" class="plist"></ul>
+      </div>
+      <button class="btn ghost" id="menu-logout">Se déconnecter</button>
+    </div>
+  </section>
+
+  <!-- ===================== Écran d'accueil ===================== -->
+  <section id="screen-join" class="screen">
+    <div class="title-block">
+      <div class="eyebrow">Réseau local · jusqu'à 8 contre 8</div>
+      <h1 class="logo">TANK<em>3D</em></h1>
+      <div class="hazard"></div>
+      <form id="join-form">
+        <div class="login-grid">
+          <label for="name">Indicatif</label>
+          <label for="password">Mot de passe</label>
+          <input id="name" maxlength="16" placeholder="Ton pseudo" autocomplete="username" spellcheck="false" required>
+          <input id="password" type="password" maxlength="64" minlength="4" placeholder="4 caractères min." autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="btn primary" id="btn-login">Entrer au salon</button>
+        <p id="login-error" role="alert"></p>
+        <p class="login-hint">Nouveau pseudo ? Le compte est créé à la première connexion et garde ta progression de campagne sur le PC du serveur.</p>
+      </form>
+    </div>
+  </section>
+
+  <!-- ========================= Salon =========================
+       Barre du haut : logo, mode de jeu, compte. Trois colonnes : l'opération (quoi), mon char (avec quoi),
+       l'équipage (avec qui). Barre du bas : commandes et lancement. -->
+  <section id="screen-lobby" class="screen hidden">
+    <header class="lb-top">
+      <h1 class="logo small">TANK<em>3D</em></h1>
+      <nav class="lb-modes" id="mode" aria-label="Mode de jeu">
+        <button data-v="skirmish"><small>Joueurs contre joueurs</small>Escarmouche</button>
+        <button data-v="campaign"><small>Coopération contre l'IA</small>Campagne</button>
+      </nav>
+      <div class="lb-account">
+        <div id="lobby-info"></div>
+        <div id="account-bar">
+          <div class="ac-id">
+            <b id="account-name"></b>
+            <span id="account-rank"></span>
+            <div class="xpbar" title=""><i id="account-xp"></i></div>
+            <span id="account-stars"></span>
+          </div>
+          <div class="ac-wallet"><b id="account-credits"></b><button class="btn primary" id="btn-store">Store</button></div>
+          <button class="btn ghost" id="btn-logout" title="Changer de compte">Changer</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- ---------- l'opération ---------- -->
+    <aside class="col left">
+      <div class="sec-head"><span>Opération</span><span class="count campaign-only" id="mission-count"></span><span class="count skirmish-only" id="map-count"></span></div>
+
+      <div class="campaign-only op">
+        <button class="op-card" id="mission-card" title="Ouvrir la carte de campagne pour choisir une autre mission">
+          <canvas id="mission-preview"></canvas>
+          <span class="op-overlay">
+            <span class="op-chapter" id="mc-chapter"></span>
+            <span class="op-name" id="mc-name"></span>
+            <span class="op-stars" id="mc-stars"></span>
+          </span>
+          <span class="op-change"><span id="mc-change">Changer de mission</span> <i>›</i></span>
+        </button>
+        <p class="op-brief" id="mc-brief"></p>
+        <div class="op-obj"><span>Objectif</span><b id="mc-obj"></b></div>
+        <div class="field">
+          <div class="field-head">Difficulté</div>
+          <div class="segmented" id="difficulty">
+            <button data-v="easy"><small>★</small>Recrue</button><button data-v="normal"><small>★★</small>Vétéran</button><button data-v="hard"><small>★★★</small>Élite</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="skirmish-only op">
+        <div class="op-card static">
+          <canvas id="map-preview"></canvas>
+          <button class="arrow ov prev" id="map-prev" aria-label="Carte précédente">‹</button>
+          <button class="arrow ov next" id="map-next" aria-label="Carte suivante">›</button>
+          <span class="op-overlay">
+            <span class="op-chapter">Carte</span>
+            <span class="op-name" id="map-name"></span>
+          </span>
+        </div>
+        <p class="op-brief" id="map-desc"></p>
+        <div class="op-obj"><span>Objectif</span><b>Détruire l'équipe adverse ou capturer la zone centrale. Pas de réapparition pendant une manche.</b></div>
+        <div class="field">
+          <div class="field-head">Manches à gagner</div>
+          <div class="segmented" id="rounds">
+            <button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="5">5</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ---------- mon char ---------- -->
+    <div class="col mid">
+      <div id="plate">
+        <div id="plate-role"></div>
+        <div class="plate-row">
+          <button class="arrow big" id="tank-prev" aria-label="Char précédent">‹</button>
+          <div id="plate-name"></div>
+          <button class="arrow big" id="tank-next" aria-label="Char suivant">›</button>
+        </div>
+        <div class="plate-count" id="tank-count"></div>
+        <div id="tank-lock" class="hidden"><span id="tank-lock-text"></span><button class="btn primary" id="tank-to-store">Voir au Store</button></div>
+      </div>
+      <div class="garage">
+        <div class="g-col">
+          <div class="field-head">Caractéristiques</div>
+          <p class="g-desc" id="tank-desc"></p>
+          <div id="tank-trait" class="hidden"></div>
+          <div id="tank-stats"></div>
+        </div>
+        <div class="g-col">
+          <div class="field-head"><span>Skin</span><span class="count" id="skin-count"></span></div>
+          <div id="skin-list"></div>
+          <div id="skin-name"></div>
+          <p class="g-desc" id="skin-desc"></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- l'équipage ---------- -->
+    <aside class="col right">
+      <div class="sec-head"><span>Équipage</span></div>
+      <div class="squad red">
+        <div class="squad-head"><span>Rouges</span><span class="count" id="count-red"></span></div>
+        <ul id="list-red"></ul>
+        <div class="squad-actions">
+          <button class="btn join-team" data-team="red">Rejoindre</button>
+          <button class="btn ghost add-bot" data-team="red">+ Bot</button>
+        </div>
+      </div>
+
+      <div class="squad blue">
+        <div class="squad-head"><span>Bleus</span><span class="count" id="count-blue"></span></div>
+        <ul id="list-blue"></ul>
+        <div class="squad-actions">
+          <button class="btn join-team" data-team="blue">Rejoindre</button>
+          <button class="btn ghost add-bot" data-team="blue">+ Bot</button>
+        </div>
+      </div>
+
+      <div class="spec-box">
+        <div class="spec-head"><span>Spectateurs</span><button class="btn ghost" id="btn-spectate">Devenir spectateur</button></div>
+        <ul id="spectators"></ul>
+      </div>
+    </aside>
+
+    <footer class="lb-bottom">
+      <div class="lb-keys"><kbd>Z</kbd><kbd>Q</kbd><kbd>S</kbd><kbd>D</kbd> piloter <kbd>←</kbd><kbd>→</kbd> tourelle <kbd>Espace</kbd> feu <kbd>Tab</kbd> scores <kbd>Échap</kbd> menu</div>
+      <div class="lb-go">
+        <p id="lobby-hint"></p>
+        <button class="btn" id="btn-back-game">Retour à la partie</button>
+        <button id="btn-start" class="btn primary big">Lancer la partie</button>
+      </div>
+    </footer>
+  </section>
+
+  <!-- ===================== Carte de campagne ===================== -->
+  <section id="screen-map" class="screen hidden">
+    <div class="cmap-main">
+      <header class="cmap-head">
+        <div>
+          <div class="eyebrow" id="cmap-eyebrow">Carte de campagne</div>
+          <h1 class="logo small">Théâtre d'opérations</h1>
+        </div>
+        <div id="cmap-total"></div>
+        <button class="btn ghost" id="cmap-close">‹ Retour au salon <kbd>Échap</kbd></button>
+      </header>
+      <div class="cmap-frame"><svg id="cmap" viewBox="0 0 1200 640" role="img" aria-label="Carte de la campagne"></svg></div>
+      <div class="cmap-legend">
+        <span><b>★</b> Recrue</span><span><b>★★</b> Vétéran</span><span><b>★★★</b> Élite</span>
+        <span class="lg-note">Chaque étoile = un niveau de difficulté réussi. Réussir une mission (peu importe la difficulté) ouvre la suivante.</span>
+      </div>
+    </div>
+    <aside class="cmap-side">
+      <div class="eyebrow" id="cs-chapter"></div>
+      <h2 id="cs-name"></h2>
+      <div id="cs-stars"></div>
+      <p id="cs-brief"></p>
+      <p id="cs-obj"></p>
+      <div id="cs-diffs"></div>
+      <p id="cs-note"></p>
+      <button class="btn primary big" id="cs-pick">Choisir cette mission</button>
+    </aside>
+  </section>
+
+  <section id="screen-debrief" class="screen hidden">
+    <div class="debrief">
+      <div class="eyebrow" id="db-eyebrow">Rapport de mission</div>
+      <h1 class="logo small" id="db-title"></h1>
+      <div class="hazard"></div>
+      <div id="db-stars"></div>
+      <div id="db-record"></div>
+      <div id="db-unlock" class="hidden"></div>
+      <div id="db-rewards" class="rewards hidden"></div>
+      <div id="db-facts"></div>
+      <table id="db-table" class="db-table"></table>
+      <div id="db-actions">
+        <button class="btn primary" id="db-next">Mission suivante</button>
+        <button class="btn" id="db-retry">Rejouer</button>
+        <button class="btn ghost" id="db-lobby">Retour au salon</button>
+      </div>
+      <p id="db-wait"></p>
+    </div>
+  </section>
+
+  <!-- ---------- Store : achat des chars avec les crédits ---------- -->
+  <section id="screen-store" class="screen hidden">
+    <aside class="st-list">
+      <header>
+        <div class="eyebrow">Arsenal</div>
+        <h1 class="logo small">Store</h1>
+        <div class="st-wallet">Solde <b id="store-credits"></b></div>
+      </header>
+      <div id="store-items"></div>
+      <button class="btn ghost" id="store-close">‹ Retour au salon <kbd>Échap</kbd></button>
+    </aside>
+    <div class="st-stage">
+      <div id="store-stage-name"></div>
+      <div id="store-stage-role"></div>
+    </div>
+    <aside class="st-side">
+      <div class="eyebrow" id="store-role"></div>
+      <h2 id="store-name"></h2>
+      <div id="store-trait" class="hidden"></div>
+      <p class="g-desc" id="store-desc"></p>
+      <div id="store-stats"></div>
+      <div class="st-price"><span>Prix</span><b id="store-price"></b></div>
+      <p id="store-note"></p>
+      <button class="btn primary big" id="store-action"></button>
+      <button class="btn ghost hidden" id="store-cancel">Annuler</button>
+    </aside>
+  </section>
+
+  <!-- ---------- rapport de bataille (escarmouche) ---------- -->
+  <section id="screen-report" class="screen hidden">
+    <div class="debrief report">
+      <div class="eyebrow" id="rp-eyebrow">Rapport de bataille</div>
+      <h1 class="logo small" id="rp-title"></h1>
+      <div class="hazard"></div>
+      <div id="rp-score"></div>
+      <div id="rp-rewards" class="rewards hidden"></div>
+      <table id="rp-table" class="db-table"></table>
+      <div class="rp-actions"><button class="btn primary" id="rp-close">Continuer</button></div>
+    </div>
+  </section>
+
+  <section id="screen-lost" class="screen hidden">
+    <div class="title-block">
+      <div class="eyebrow" id="lost-eyebrow">Liaison interrompue</div>
+      <h1 class="logo small" id="lost-title">Connexion perdue</h1>
+      <div class="hazard"></div>
+      <p id="lost-text">Le serveur ne répond plus. Vérifie qu'il est toujours lancé.</p>
+      <button class="btn primary" onclick="location.reload()">Se reconnecter</button>
+    </div>
+  </section>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
