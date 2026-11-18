@@ -105,30 +105,41 @@ export function pointHitsTank(px, py, pz, t, def, gy = 0) {
 }
 
 // Hauteur d'un obus après `dist` mètres : il quitte la bouche du canon puis descend vers une
-// hauteur de vol commune, sinon les canons hauts (char lourd, boss) passeraient au-dessus des chars bas.
+// hauteur de vol commune (au-dessus du sol `g` sous le tireur), sinon les canons hauts (char
+// lourd, boss) passeraient au-dessus des chars bas.
 export const SHELL_FLIGHT_Y = 1.5;
-// Sur une carte à relief, l'obus part de l'altitude réelle du canon et vole en ligne droite
-// avec la pente `vy` (montée par mètre) : c'est ce qui permet à une colline de l'arrêter.
-export function shellHeight(y0, dist, vy) {
+// Sur une carte à relief, un obus pointé sur une cible part de l'altitude réelle du canon et
+// vole en ligne droite avec la pente `vy` (montée par mètre) : une colline peut l'arrêter.
+export function shellHeight(y0, dist, vy, g = 0) {
   if (vy !== undefined) return y0 + vy * dist;
-  return y0 <= SHELL_FLIGHT_Y ? y0 : Math.max(SHELL_FLIGHT_Y, y0 - dist * 0.25);
+  const h = y0 - g;
+  return g + (h <= SHELL_FLIGHT_Y ? h : Math.max(SHELL_FLIGHT_Y, h - dist * 0.25));
 }
 
-// Visée verticale automatique (cartes à relief) : s'il y a un char ennemi dans un cône étroit
-// devant la tourelle, l'obus est pointé sur lui, en montée comme en descente. Sinon il part à
-// plat. `targets` = liste de { x, z } des ennemis vivants. Renvoie la pente `vy`.
-export const AUTO_AIM_CONE = 0.08; // rad (≈ 4,5°)
-export function autoPitch(x, z, ty, y0, targets, map) {
-  let best = 0, bestD = Infinity;
+// Visée verticale automatique (cartes à relief) : on cherche le char ennemi que l'obus va
+// croiser, en tenant compte de son déplacement pendant le vol (tir anticipé devant un char
+// qui roule). L'obus est alors pointé sur l'endroit où sera ce char, en montée comme en
+// descente. `targets` = liste de { x, z, yaw, speed } des ennemis vivants. Renvoie la pente
+// `vy`, ou undefined si aucun char n'est dans la ligne de tir (vol à hauteur commune).
+export const AUTO_AIM_CONE = 0.08; // rad (≈ 4,5°) : écart toléré au point de rencontre
+export function autoPitch(x, z, ty, y0, targets, map, shellSpeed = 100) {
+  const dx = Math.sin(ty), dz = Math.cos(ty), S = shellSpeed > 0 ? shellSpeed : 100;
+  let best, bestS = Infinity;
   for (const o of targets) {
-    const dx = o.x - x, dz = o.z - z;
-    const d = Math.hypot(dx, dz);
-    if (d < 3 || d > 170 || d >= bestD) continue;
-    if (Math.abs(angleDiff(ty, Math.atan2(dx, dz))) > AUTO_AIM_CONE) continue;
-    bestD = d;
-    best = (heightAt(o.x, o.z, map) + 1.0 - y0) / d;
+    const px = o.x - x, pz = o.z - z;
+    const v = o.speed ?? 0, vx = Math.sin(o.yaw ?? 0) * v, vz = Math.cos(o.yaw ?? 0) * v;
+    // instant où l'obus passe au plus près du char (mouvement relatif rectiligne)
+    const wx = vx - dx * S, wz = vz - dz * S;
+    const t = -(px * wx + pz * wz) / (wx * wx + wz * wz);
+    if (!(t > 0)) continue;
+    const s = S * t; // distance parcourue par l'obus à cet instant
+    if (s < 3 || s > 170 || s >= bestS) continue;
+    const fx = px + vx * t, fz = pz + vz * t; // position du char à ce moment-là
+    if (Math.hypot(fx - dx * s, fz - dz * s) > Math.max(1.5, s * AUTO_AIM_CONE)) continue;
+    bestS = s;
+    best = (heightAt(x + fx, z + fz, map) + 1.0 - y0) / s;
   }
-  return clamp(best, -0.6, 0.6);
+  return best === undefined ? undefined : clamp(best, -0.6, 0.6);
 }
 
 // Position d'un obus de mortier (tir en cloche) à l'instant t (0..1).

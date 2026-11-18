@@ -553,10 +553,10 @@ function onEvent(ev) {
       if (ev.o === game.myId && fx.confirmLocalShell(ev.id)) break; // déjà affiché par la prédiction
       const def = unitDef(game.roster.get(ev.o)?.type);
       const L = ev.L ?? def.barrelLength, speed = ev.sp ?? def.shellSpeed;
-      fx.spawnShell(ev.id, ev.x, ev.y, ev.z, ev.dx, ev.dz, L, speed, ev.md ?? def.shellSpeed * def.shellLifeTicks * DT, ev.sz ?? 1, ev.vy);
+      fx.spawnShell(ev.id, ev.x, ev.y, ev.z, ev.dx, ev.dz, L, speed, ev.md ?? def.shellSpeed * def.shellLifeTicks * DT, ev.sz ?? 1, ev.vy, ev.g);
       const small = (ev.sz ?? 1) < 0.8;
-      if (small) fx.sparks(ev.x + ev.dx * L, shellHeight(ev.y, L, ev.vy), ev.z + ev.dz * L, 3, 0.4);
-      else fx.muzzleFlash(ev.x + ev.dx * L, shellHeight(ev.y, L, ev.vy), ev.z + ev.dz * L, ev.dx, ev.dz);
+      if (small) fx.sparks(ev.x + ev.dx * L, shellHeight(ev.y, L, ev.vy, ev.g), ev.z + ev.dz * L, 3, 0.4);
+      else fx.muzzleFlash(ev.x + ev.dx * L, shellHeight(ev.y, L, ev.vy, ev.g), ev.z + ev.dz * L, ev.dx, ev.dz);
       renderer.fireKick(ev.o);
       sfx.shot(volumeAt(ev.x, ev.z) * (small ? 0.25 : 1));
       break;
@@ -817,9 +817,9 @@ function onLocalFire() {
     return;
   }
   const dx = Math.sin(p.ty), dz = Math.cos(p.ty), L = def.barrelLength;
-  const { y0, vy } = shotProfile(p, def);
-  fx.spawnLocalShell(p.x, y0, p.z, dx, dz, L, def.shellSpeed, def.shellSpeed * def.shellLifeTicks * DT, 1, vy);
-  fx.muzzleFlash(p.x + dx * L, shellHeight(y0, L, vy), p.z + dz * L, dx, dz);
+  const { y0, vy, g } = shotProfile(p, def);
+  fx.spawnLocalShell(p.x, y0, p.z, dx, dz, L, def.shellSpeed, def.shellSpeed * def.shellLifeTicks * DT, 1, vy, g);
+  fx.muzzleFlash(p.x + dx * L, shellHeight(y0, L, vy, g), p.z + dz * L, dx, dz);
   renderer.fireKick(game.myId);
   renderer.shake = 0.3;
   renderer.kick = 1.1;
@@ -829,11 +829,11 @@ function onLocalFire() {
 // Altitude du canon et pente de l'obus (visée verticale automatique sur les cartes à relief ; vy absent sinon).
 function shotProfile(p, def) {
   const map = game.map;
-  if (!map.hills) return { y0: def.muzzleHeight, vy: undefined };
-  const y0 = def.muzzleHeight + heightAt(p.x, p.z, map);
+  if (!map.hills) return { y0: def.muzzleHeight, vy: undefined, g: 0 };
+  const g = heightAt(p.x, p.z, map), y0 = def.muzzleHeight + g;
   const foes = [];
   for (const v of views.values()) if (v.alive && v.team !== game.me?.team && v.id !== game.myId) foes.push(v);
-  return { y0, vy: autoPitch(p.x, p.z, p.ty, y0, foes, map) };
+  return { y0, vy: autoPitch(p.x, p.z, p.ty, y0, foes, map, def.shellSpeed), g };
 }
 
 // Barres de vie : un char ennemi dans un buisson n'affiche pas la sienne, sauf 5 s après avoir été touché.
@@ -1078,7 +1078,7 @@ function frame(now) {
 function impactDistance(mine, def, shot) {
   const dx = Math.sin(mine.ty), dz = Math.cos(mine.ty);
   for (let d = 0.5; d <= 140; d += 0.5) {
-    const x = mine.x + dx * d, y = shellHeight(shot.y0, d, shot.vy), z = mine.z + dz * d;
+    const x = mine.x + dx * d, y = shellHeight(shot.y0, d, shot.vy, shot.g), z = mine.z + dz * d;
     if (pointBlocked(x, y, z, game.map)) return d;
     for (const v of views.values()) if (v.id !== game.myId && pointHitsTank(x, y, z, v, unitDef(v.type), v.gy)) return d;
   }
@@ -1189,7 +1189,7 @@ function updateHud(dt, mine, target) {
       fx.aimRing(null);
       const shot = shotProfile(mine, def);
       const d = impactDistance(mine, def, shot);
-      s = renderer.project(mine.x + Math.sin(mine.ty) * d, shellHeight(shot.y0, d, shot.vy), mine.z + Math.cos(mine.ty) * d);
+      s = renderer.project(mine.x + Math.sin(mine.ty) * d, shellHeight(shot.y0, d, shot.vy, shot.g), mine.z + Math.cos(mine.ty) * d);
     }
     hud.setStatus(def.name, mine.hp, mine.maxHp ?? def.maxHp, game.pred.reload, Math.round(reloadMax), extra);
     hud.setGunmark(s.front ? s : null);

@@ -879,15 +879,17 @@ export class Room {
 
   spawnShell(p, def, x, z, angle) {
     // carte à relief : le canon part de l'altitude du sol, avec visée verticale automatique
-    let y0 = def.muzzleHeight, vy;
+    // (sans cible dans la ligne de tir, l'obus vole à hauteur commune au-dessus du sol `g`)
+    let y0 = def.muzzleHeight, vy, g = 0;
     if (this.map.hills) {
-      y0 += heightAt(x, z, this.map);
+      g = heightAt(x, z, this.map);
+      y0 += g;
       const foes = [];
       for (const o of this.roundPlayers()) if (o.alive && o.team !== p.team) foes.push(o.tank);
-      vy = autoPitch(x, z, angle, y0, foes, this.map);
+      vy = autoPitch(x, z, angle, y0, foes, this.map, def.shellSpeed);
     }
     const s = {
-      id: this.nextShellId++, owner: p.id, team: p.team, vy,
+      id: this.nextShellId++, owner: p.id, team: p.team, vy, g,
       x, y: y0, y0, z, dist: 0,
       dx: Math.sin(angle), dz: Math.cos(angle),
       speed: def.shellSpeed, damage: def.shellDamage * this.dmgMulOf(p), life: def.shellLifeTicks,
@@ -896,6 +898,7 @@ export class Room {
     this.shells.push(s);
     const ev = { k: 'shot', id: s.id, o: p.id, x: +x.toFixed(2), y: +s.y.toFixed(2), z: +z.toFixed(2), dx: +s.dx.toFixed(4), dz: +s.dz.toFixed(4) };
     if (vy !== undefined) ev.vy = +vy.toFixed(4);
+    else if (g) ev.g = +g.toFixed(2);
     if (p.unit) Object.assign(ev, { sp: def.shellSpeed, L: def.barrelLength, md: def.shellSpeed * def.shellLifeTicks * DT, sz: def.shellScale ?? 1 });
     else if (def.shellScale) ev.sz = def.shellScale;
     this.events.push(ev);
@@ -939,7 +942,7 @@ export class Room {
         s.x += s.dx * ds;
         s.z += s.dz * ds;
         s.dist += ds;
-        s.y = shellHeight(s.y0, s.dist, s.vy);
+        s.y = shellHeight(s.y0, s.dist, s.vy, s.g);
         if (pointBlocked(s.x, s.y, s.z, this.map)) {
           this.hitDecor(s);
           this.explode(s, null);

@@ -66,15 +66,15 @@ export class Effects {
 
   // ---------------------------------------------------------------- obus
 
-  spawnShell(key, x, y, z, dx, dz, startDist, speed, maxDist, size = 1, vy) {
+  spawnShell(key, x, y, z, dx, dz, startDist, speed, maxDist, size = 1, vy, g = 0) {
     const mesh = new THREE.Group();
     mesh.add(new THREE.Mesh(this.geo.shell, this.shellMat), new THREE.Mesh(this.geo.glow, this.glowMat), new THREE.Mesh(this.geo.trail, this.trailMat));
     mesh.rotation.order = 'YXZ'; // cap puis inclinaison
     mesh.rotation.y = Math.atan2(dx, dz);
     mesh.scale.setScalar(size);
     this.scene.add(mesh);
-    const s = { mesh, x, y, z, dx, dz, dist: startDist, speed, maxDist, age: 0, vy };
-    mesh.position.set(x + dx * startDist, shellHeight(y, startDist, vy), z + dz * startDist);
+    const s = { mesh, x, y, z, dx, dz, dist: startDist, speed, maxDist, age: 0, vy, g };
+    mesh.position.set(x + dx * startDist, shellHeight(y, startDist, vy, g), z + dz * startDist);
     // carte à relief : l'obus est incliné selon sa pente
     if (vy !== undefined) mesh.rotation.x = -Math.atan(vy);
     this.shells.set(key, s);
@@ -272,7 +272,7 @@ export class Effects {
       s.dist += s.speed * dt;
       s.age += dt;
       const x = s.x + s.dx * s.dist, z = s.z + s.dz * s.dist;
-      const sy = shellHeight(s.y, s.dist, s.vy);
+      const sy = shellHeight(s.y, s.dist, s.vy, s.g);
       s.mesh.position.set(x, sy, z);
       // l'obus disparaît au contact du décor ; l'explosion arrive avec l'événement serveur
       if (s.mesh.visible && this.map && pointBlocked(x, sy, z, this.map)) s.mesh.visible = false;
