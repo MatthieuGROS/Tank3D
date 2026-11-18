@@ -54,7 +54,7 @@ export const fmtCr = (n) => `${Math.round(n).toLocaleString('fr-FR')} cr`;
 export function skirmishXp({ dmg = 0, kills = 0, roundsWon = 0, won = false }) {
   return [
     ['Participation', 25],
-    ['Dégâts infligés', Math.round(dmg / 2)],
+    ['Dégâts infligés', Math.round(dmg / 20)],
     ['Destructions', kills * 20],
     ['Manches gagnées', roundsWon * 25],
     ['Victoire', won ? 75 : 0],
@@ -65,7 +65,7 @@ export function skirmishXp({ dmg = 0, kills = 0, roundsWon = 0, won = false }) {
 export function missionXp({ dmg = 0, kills = 0, success = false, stars = 1 }) {
   return [
     ['Mission accomplie', success ? [0, 100, 150, 200][stars] ?? 100 : 0],
-    ['Dégâts infligés', Math.round(dmg / 4)],
+    ['Dégâts infligés', Math.round(dmg / 40)],
     ['Destructions', kills * 10],
     ['Participation', success ? 0 : 10],
   ].filter(([, n]) => n > 0);
@@ -74,7 +74,7 @@ export function missionXp({ dmg = 0, kills = 0, success = false, stars = 1 }) {
 export const CREDITS = {
   participation: 200, // une fois par partie
   kill: 1000,
-  perDamage: 2,
+  perDamage: 0.2, // par point de dégâts (les dégâts sont à l'échelle ×10)
   repair: 500, // char détruit (escarmouche)
   starBonus: [0, 5000, 10000, 15000], // campagne : première réussite à ★, ★★, ★★★ (cumulables)
   missionWin: 2000, // campagne : réussite sans nouvelle étoile
@@ -87,7 +87,7 @@ export function skirmishCredits({ dmg = 0, kills = 0, deaths = 0, won = false })
   const parts = [
     ['Participation', CREDITS.participation],
     [`Destructions (${kills} × ${CREDITS.kill.toLocaleString('fr-FR')})`, kills * CREDITS.kill],
-    [`Dégâts infligés (${Math.round(dmg)} × ${CREDITS.perDamage})`, Math.round(dmg) * CREDITS.perDamage],
+    [`Dégâts infligés (${Math.round(dmg)} × ${CREDITS.perDamage.toLocaleString('fr-FR')})`, Math.round(Math.round(dmg) * CREDITS.perDamage)],
   ].filter(([, n]) => n > 0);
   const earned = parts.reduce((n, [, v]) => n + v, 0);
   if (!won) parts.push(['Défaite : gains divisés par 2', -Math.floor(earned / 2)]);
