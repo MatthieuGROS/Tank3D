@@ -6,7 +6,7 @@
 // seulement quel char exposer (showcaseType) et quelles marges laisser autour de lui (insets).
 import { TEAMS, TEAM_INFO, TANK_TYPES, UNIT_TYPES, DEFAULT_TANK, RULES, DIFFICULTIES } from '/shared/constants.js';
 import { RANKS, rankInfo, tankOwned, tankPrice, fmtCr } from '/shared/progress.js';
-import { MAPS } from '/shared/map.js';
+import { MAPS, RACE_MAPS } from '/shared/map.js';
 import { MISSIONS, CHAPTERS, getMission } from '/shared/campaign.js';
 import { SKINS, DEFAULT_SKIN, skinUnlocked, unlockedSkins } from '/shared/skins.js';
 import { drawMapPreview } from '../hud.js';
@@ -22,6 +22,7 @@ const THEME = {
   meadow: { name: 'Prairie', css: 'linear-gradient(160deg, #3b5230, #1d2a19)' },
   desert: { name: 'Désert', css: 'linear-gradient(160deg, #6d5630, #2e2414)' },
   snow: { name: 'Neige', css: 'linear-gradient(160deg, #56677a, #1f2a35)' },
+  neon: { name: 'Néon', css: 'linear-gradient(160deg, #6a1b8a, #0a1a3a 60%, #0a3a4a)' },
 };
 const themeOf = (map) => THEME[map.theme] ?? THEME.meadow;
 const stars = (n, max = 3) => '★'.repeat(n) + '☆'.repeat(max - n);
@@ -56,12 +57,14 @@ export class Hub {
     this.buildOps();
     this.bind();
     addEventListener('resize', () => (this.dirty = true));
+    $('screen-lobby').addEventListener('scroll', () => (this.dirty = true), { passive: true }); // hub empilé : le cadrage suit le défilement
   }
 
   // ------------------------------------------------------------ état commun
   get game() { return this.ctx.game; }
   get net() { return this.ctx.net; }
   get campaign() { return this.ctx.isCampaign(); }
+  get race() { return this.game.settings.mode === 'race'; }
   get running() { return this.game.phase !== 'lobby'; }
   get isHost() { return this.game.hostId === this.game.myId; }
   owned = (type) => tankOwned(type, { tanks: this.game.account?.tanks ?? [] });
@@ -135,17 +138,25 @@ export class Hub {
       // le haut de l'espace libre est le bas du bandeau de nom du char
       let top = $('hub-top').getBoundingClientRect().bottom;
       let l = 0, r = 0, b = 0;
-      if (this.page === 'hangar') {
-        const c = rect('crew'), s = rect('sheet'), d = rect('dock'), n = rect('np');
-        l = c ? c.right : 0;
-        r = s ? innerWidth - s.left : 0;
-        b = d ? innerHeight - d.top : 0;
-        if (n) top = Math.max(top, n.bottom - 14);
-      } else if (this.page === 'store') {
-        const c = rect('store-list'), s = rect('store-detail'), n = rect('snp');
-        l = c ? c.right : 0;
-        r = s ? innerWidth - s.left : 0;
-        if (n) top = Math.max(top, n.bottom - 14);
+      if (this.page === 'hangar' || this.page === 'store') {
+        const hangar = this.page === 'hangar';
+        const n = rect(hangar ? 'np' : 'snp');
+        // chaque panneau grignote le côté dont il est le plus proche ; un panneau pleine largeur (mobile, hub empilé) ne laisse que le haut
+        for (const id of hangar ? ['crew', 'sheet'] : ['store-list', 'store-detail']) {
+          const p = rect(id);
+          if (!p || p.width > innerWidth * 0.7) continue;
+          if (p.left + p.width / 2 < innerWidth / 2) l = Math.max(l, p.right);
+          else r = Math.max(r, innerWidth - p.left);
+        }
+        const d = hangar ? rect('dock') : null;
+        if (d) b = innerHeight - d.top;
+        if (n) {
+          if (n.width > innerWidth * 0.7 && getComputedStyle($('screen-lobby')).display === 'flex') {
+            // hub empilé : le char occupe la zone du bandeau de nom, qui défile avec la page
+            top = Math.max(top, n.top);
+            b = Math.max(b, innerHeight - Math.max(top + 120, n.bottom));
+          } else top = Math.max(top, n.bottom - 14);
+        }
       }
       this.ins = { l, r, t: top, b };
       if (b) document.documentElement.style.setProperty('--dock-h', `${Math.round(b)}px`); // le chat se pose au-dessus du bandeau
@@ -256,6 +267,47 @@ export class Hub {
       this.mapCards.set(key, card);
     }
     $('map-grid').replaceChildren(...this.mapCards.values());
+    this.raceCards = new Map();
+    for (const key of Object.keys(RACE_MAPS)) {
+      const map = RACE_MAPS[key];
+      const card = el('button', 'mcard');
+      card.type = 'button';
+      const art = el('div', 'mc-art');
+      art.style.background = themeOf(map).css;
+      const canvas = el('canvas');
+      drawMapPreview(canvas, map, 300);
+      art.append(canvas);
+      const row = el('div', 'mc-info');
+      row.append(el('b', '', map.name), el('small', '', `${Math.round(map.race.length)} m par tour`));
+      card.append(art, row);
+      card.addEventListener('click', () => {
+        if (this.isHost && !this.running) this.net.send({ type: 'settings', raceMap: key });
+      });
+      this.raceCards.set(key, card);
+    }
+    $('race-grid').replaceChildren(...this.raceCards.values());
+    const challenge = (icon, title, text) => {
+      const li = el('li');
+      li.append(el('i', '', icon), el('b', '', title), el('span', '', text));
+      return li;
+    };
+    const tip = {
+      pad: challenge('⚡', 'Tapis turbo', 'Une flèche lumineuse au sol : turbo pendant 1,3 s.'),
+      ramp: challenge('◢', 'Tremplins', 'Plus tu vas vite, plus tu voles loin. Prends un turbo juste avant.'),
+      gate: challenge('▮', 'Portes et barres', 'Elles s’ouvrent et se ferment : attends le feu vert ou passe entre les barres.'),
+      mud: challenge('≈', 'Boue', 'Elle ralentit, surtout les chars légers. Un tremplin permet de la survoler.'),
+      water: challenge('≋', 'Rivière', 'Saute-la ou prends le ponton (et sa porte). À l’eau : retour au dernier point, +3 s.'),
+      bump: challenge('●', 'Bumpers', 'Des plots rebondissants qui te renvoient comme une bille de flipper.'),
+      shot: challenge('✦', 'Tirs', 'Aucun dégât : un tir pousse. Plus le char tireur est puissant et le char touché léger, plus il est repoussé loin.'),
+      void: challenge('⌵', 'Le vide', 'Pas de sol hors de la piste : on tombe, et on repart du dernier point de passage (+3 s). Un tir bien placé suffit.'),
+      launch: challenge('⇧', 'Lanceurs', 'Une plaque de gravité te catapulte et te donne de l’élan : c’est elle qui ouvre le raccourci au-dessus de l’abîme.'),
+      tile: challenge('▦', 'Dalles', 'Elles clignotent avant de disparaître : lis le rythme, change de colonne.'),
+      rotor: challenge('✢', 'Rotors', 'Les barres du réacteur tournent autour du cœur d’énergie et te jettent dans le vide si elles te cueillent.'),
+    };
+    this.raceTips = {
+      meadow: [tip.pad, tip.ramp, tip.gate, tip.mud, tip.water, tip.bump, tip.shot],
+      void: [tip.void, tip.pad, tip.launch, tip.tile, tip.rotor, tip.ramp, tip.gate, tip.bump, tip.shot],
+    };
     const diffs = Object.entries(DIFFICULTIES).map(([key, d]) => {
       const b = el('button', 'diff-btn');
       b.type = 'button';
@@ -298,6 +350,7 @@ export class Hub {
     for (const b of document.querySelectorAll('.add-bot')) b.addEventListener('click', () => this.net.send({ type: 'addBot', team: b.dataset.team }));
     for (const b of $('mode').children) b.addEventListener('click', () => this.net.send({ type: 'settings', mode: b.dataset.v }));
     for (const b of $('rounds').children) b.addEventListener('click', () => this.net.send({ type: 'settings', roundsToWin: Number(b.dataset.v) }));
+    for (const b of $('race-laps').children) b.addEventListener('click', () => this.net.send({ type: 'settings', laps: Number(b.dataset.v) }));
     $('cs-pick').addEventListener('click', () => {
       this.net.send({ type: 'settings', mission: this.mapFocus });
       this.setPage('hangar');
@@ -474,7 +527,7 @@ export class Hub {
       b.classList.toggle('on', b.dataset.page === this.page);
       if (b.dataset.page === 'store') b.disabled = this.running;
     }
-    $('nav-ops-sub').textContent = this.campaign ? 'Campagne' : 'Escarmouche';
+    $('nav-ops-sub').textContent = this.campaign ? 'Campagne' : this.race ? 'Course' : 'Escarmouche';
     if (!acc) return;
     $('account-name').textContent = acc.name;
     const r = rankInfo(acc.xp);
@@ -489,7 +542,7 @@ export class Hub {
 
   // ---- équipage
   renderCrew() {
-    const g = this.game, me = g.me, campaign = this.campaign, host = this.isHost, running = this.running;
+    const g = this.game, me = g.me, campaign = this.campaign, race = this.race, host = this.isHost, running = this.running;
     let total = 0;
     for (const team of TEAMS) {
       const members = [...g.roster.values()].filter((p) => p.team === team && !p.unit);
@@ -500,17 +553,17 @@ export class Hub {
       $(`count-${team}`).textContent = `${members.length} / ${RULES.maxPlayersPerTeam}`;
       const full = members.length >= RULES.maxPlayersPerTeam;
       const squad = document.querySelector(`.squad.${team}`);
-      squad.classList.toggle('hidden', campaign && team === 'red');
-      squad.querySelector('.squad-name').textContent = campaign ? 'Escouade' : TEAM_INFO[team].label;
+      squad.classList.toggle('hidden', (campaign && team === 'red') || (race && team === 'blue'));
+      squad.querySelector('.squad-name').textContent = campaign ? 'Escouade' : race ? 'Pilotes' : TEAM_INFO[team].label;
       const join = document.querySelector(`.join-team[data-team=${team}]`);
       join.disabled = me.team === team || full || !this.ctx.canJoinTeam();
-      join.textContent = me.team === team ? (campaign ? 'Tu es dans l’escouade' : 'Tu es dans l’équipe') : campaign ? 'Rejoindre l’escouade' : 'Rejoindre';
+      join.textContent = me.team === team ? (campaign ? 'Tu es dans l’escouade' : race ? 'Tu es sur la grille' : 'Tu es dans l’équipe') : campaign ? 'Rejoindre l’escouade' : race ? 'Prendre le départ' : 'Rejoindre';
       const bot = document.querySelector(`.add-bot[data-team=${team}]`);
       bot.classList.toggle('hidden', !host || running);
       bot.disabled = full;
-      bot.title = campaign ? 'Ajouter un bot allié' : 'Ajouter un bot dans cette équipe';
+      bot.title = campaign ? 'Ajouter un bot allié' : race ? 'Ajouter un pilote bot' : 'Ajouter un bot dans cette équipe';
     }
-    $('crew-title').textContent = campaign ? 'Escouade' : 'Équipages';
+    $('crew-title').textContent = campaign ? 'Escouade' : race ? 'Grille de départ' : 'Équipages';
     $('crew-count').textContent = `${[...g.roster.values()].filter((p) => !p.unit).length} en ligne`;
     const spec = [...g.roster.values()].filter((p) => !p.team && !p.unit).map((p) => this.memberRow(p, host, running));
     if (!spec.length) spec.push(el('li', 'empty', 'Personne'));
@@ -688,10 +741,16 @@ export class Hub {
 
   // ---- lancement
   renderLaunch() {
-    const g = this.game, me = g.me, campaign = this.campaign, host = this.isHost, running = this.running;
+    const g = this.game, me = g.me, campaign = this.campaign, race = this.race, host = this.isHost, running = this.running;
     const hostName = g.roster.get(g.hostId)?.name ?? '?';
     let mode, title, detail, thumb;
-    if (campaign) {
+    if (race) {
+      const map = g.map;
+      mode = 'Course';
+      title = map.name;
+      detail = `${g.settings.laps} tour${g.settings.laps > 1 ? 's' : ''} · ${Math.round(map.race.length)} m`;
+      thumb = ['r', g.settings.raceMap, () => drawMapPreview($('launch-thumb'), map, 160)];
+    } else if (campaign) {
       const m = getMission(g.settings.mission);
       mode = `Campagne · Chapitre ${ROMAN[m.chapter]}`;
       title = m.name;
@@ -714,15 +773,15 @@ export class Hub {
     const start = $('btn-start');
     start.classList.toggle('hidden', running);
     $('btn-back-game').classList.toggle('hidden', !running);
-    const label = campaign ? 'Lancer la mission' : 'Lancer la partie';
+    const label = campaign ? 'Lancer la mission' : race ? 'Lancer la course' : 'Lancer la partie';
     start.querySelector('span').textContent = host ? label : `En attente de ${hostName}`;
     start.disabled = !host || this.teamTotal === 0;
     $('lobby-hint').textContent = running
-      ? (this.ctx.inMatch() ? `${campaign ? 'Mission' : 'Partie'} en cours : les équipes sont figées jusqu’à la fin.`
-        : `${campaign ? 'Mission' : 'Partie'} en cours : tu la regardes en spectateur. Choisis ton équipe pour la ${this.ctx.nextGame()}.`)
+      ? (this.ctx.inMatch() ? `${campaign ? 'Mission' : race ? 'Course' : 'Partie'} en cours : ${race ? 'la grille est figée' : 'les équipes sont figées'} jusqu’à la fin.`
+        : `${campaign ? 'Mission' : race ? 'Course' : 'Partie'} en cours : tu la regardes en spectateur. ${race ? 'Prends ta place sur la grille' : 'Choisis ton équipe'} pour la ${this.ctx.nextGame()}.`)
       : host
-        ? (this.teamTotal === 0 ? (campaign ? 'Rejoins l’escouade pour lancer la mission.' : 'Rejoins une équipe pour pouvoir lancer.')
-          : campaign ? 'Escouade prête : vérifie la mission et lance.' : me.team ? 'Seul ? Ajoute des bots en face et lance.' : 'Rejoins une équipe pour jouer.')
+        ? (this.teamTotal === 0 ? (campaign ? 'Rejoins l’escouade pour lancer la mission.' : race ? 'Prends le départ pour lancer la course.' : 'Rejoins une équipe pour pouvoir lancer.')
+          : campaign ? 'Escouade prête : vérifie la mission et lance.' : race ? 'Seul ? Ajoute des pilotes bots pour une vraie course.' : me.team ? 'Seul ? Ajoute des bots en face et lance.' : 'Rejoins une équipe pour jouer.')
         : `L’hôte, ${hostName}, choisit l’opération et lance la partie.`;
   }
 
@@ -737,7 +796,9 @@ export class Hub {
     $('ops-note').textContent = running ? 'Une partie est en cours : les réglages sont figés jusqu’à son terme.'
       : host ? '' : 'Seul l’hôte choisit l’opération. Tu vois ici son choix.';
     $('ops-note').classList.toggle('hidden', !running && host);
-    if (!campaign) {
+    if (this.race) {
+      this.renderRaceOps(lockOps);
+    } else if (!campaign) {
       const map = g.map;
       for (const [key, card] of this.mapCards) {
         card.classList.toggle('on', key === g.settings.map);
@@ -757,6 +818,33 @@ export class Hub {
       }
     } else {
       this.renderCampaign(lockOps);
+    }
+  }
+
+  renderRaceOps(lockOps) {
+    const g = this.game, map = g.map, race = map.race;
+    for (const [key, card] of this.raceCards) {
+      card.classList.toggle('on', key === g.settings.raceMap);
+      card.disabled = lockOps;
+    }
+    if (this.shots.race !== g.settings.raceMap) {
+      this.shots.race = g.settings.raceMap;
+      drawMapPreview($('race-preview'), map, 620);
+      $('race-art').style.background = themeOf(map).css;
+      // légende et conseils propres au circuit (le circuit au-dessus du vide n'a ni boue ni rivière)
+      const floor = !!race.floor;
+      $('race-challenges').replaceChildren(...this.raceTips[floor ? 'void' : 'meadow'].map((li) => li.cloneNode(true)));
+      $('race-legend').innerHTML = floor
+        ? '<span><i class="lg-route"></i>Piste</span><span><i class="lg-ramp"></i>Tremplin</span><span><i class="lg-pad"></i>Turbo</span><span><i class="lg-launch"></i>Lanceur</span><span><i class="lg-tile"></i>Dalle</span><span><i class="lg-gate"></i>Porte / barre</span>'
+        : '<span><i class="lg-route"></i>Circuit</span><span><i class="lg-ramp"></i>Tremplin</span><span><i class="lg-pad"></i>Turbo</span><span><i class="lg-mud"></i>Boue</span><span><i class="lg-water"></i>Rivière</span><span><i class="lg-gate"></i>Porte / barre</span>';
+    }
+    $('race-name').textContent = map.name;
+    $('race-desc').textContent = map.desc;
+    $('race-tags').replaceChildren(el('span', 'chip', themeOf(map).name), el('span', 'chip', `${Math.round(race.length)} m par tour`),
+      el('span', 'chip', `${race.cps.length - 1} points de passage`), el('span', 'chip', 'Jusqu’à 8 pilotes'));
+    for (const b of $('race-laps').children) {
+      b.classList.toggle('on', Number(b.dataset.v) === g.settings.laps);
+      b.disabled = lockOps;
     }
   }
 

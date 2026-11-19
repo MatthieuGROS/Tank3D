@@ -4,6 +4,12 @@ import { RANKS } from '/shared/progress.js';
 
 const $ = (id) => document.getElementById(id);
 
+// m:ss.d depuis des ticks
+export function fmtRaceTime(ticks) {
+  const s = Math.max(0, ticks) / TICK_RATE;
+  return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+}
+
 // Couleurs du plan par type d'objet (shared/props.js) ; défaut : bâtiment clair / rocher gris.
 const PLAN_COLORS = {
   tree: 'rgba(110, 160, 80, 0.85)', palm: 'rgba(120, 165, 80, 0.85)', dune: 'rgba(200, 170, 110, 0.6)',
@@ -43,7 +49,75 @@ export function drawMapPlan(canvas, map, maxSize) {
     g.arc(c.x, c.z, Math.max(c.r, 1), 0, Math.PI * 2);
     g.fill();
   }
+  if (map.race) drawRaceRoute(g, map.race);
   return scale;
+}
+
+// Course : tracé du circuit, points de passage et obstacles (mini-carte, carte en grand, aperçu du salon).
+function drawRaceRoute(g, race) {
+  const rect = (r, color, len = r.len, w = r.w) => {
+    const vx = -r.fz, vz = r.fx;
+    g.fillStyle = color;
+    g.beginPath();
+    [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([a, b], i) => {
+      const x = r.x + r.fx * a * len / 2 + vx * b * w / 2, z = r.z + r.fz * a * len / 2 + vz * b * w / 2;
+      if (i) g.lineTo(x, z);
+      else g.moveTo(x, z);
+    });
+    g.closePath();
+    g.fill();
+  };
+  g.lineJoin = g.lineCap = 'round';
+  if (race.floor) {
+    // circuit au-dessus du vide : on dessine le sol lui-même (cases pleines, dalles clignotantes), pas un trait de largeur fixe
+    const f = race.floor, cv = document.createElement('canvas');
+    cv.width = f.nx;
+    cv.height = f.nz;
+    const cg = cv.getContext('2d'), img = cg.createImageData(f.nx, f.nz);
+    for (let i = 0; i < f.data.length; i++) {
+      const v = f.data[i];
+      if (!v) continue;
+      const k = 0.7 + 0.5 * Math.min(1, Math.max(0, (f.hgt[i] - f.hmin) / 36)); // plus clair en altitude
+      img.data.set(v === 1 ? [Math.min(255, 118 * k), Math.min(255, 140 * k), Math.min(255, 210 * k), 160] : [255, 70, 200, 170], i * 4);
+    }
+    cg.putImageData(img, 0, 0);
+    const smooth = g.imageSmoothingEnabled;
+    g.imageSmoothingEnabled = false;
+    g.drawImage(cv, f.x0, f.z0, f.nx * f.cell, f.nz * f.cell);
+    g.imageSmoothingEnabled = smooth;
+    for (const r of race.launch) rect(r, 'rgba(255, 79, 208, 1)', Math.max(r.len, 4), r.w);
+    for (const r of race.blocks) rect(r, 'rgba(255, 176, 46, 1)');
+    for (const r of race.spinners) {
+      g.strokeStyle = 'rgba(255, 61, 110, 0.9)';
+      g.lineWidth = 2.5;
+      g.beginPath();
+      g.arc(r.x, r.z, r.len / 2, 0, Math.PI * 2);
+      g.stroke();
+    }
+  } else {
+    g.beginPath();
+    race.track.points(5).forEach(([x, z], i) => (i ? g.lineTo(x, z) : g.moveTo(x, z)));
+    g.closePath();
+    g.strokeStyle = 'rgba(205, 200, 178, 0.28)';
+    g.lineWidth = race.width;
+    g.stroke();
+    g.strokeStyle = 'rgba(240, 235, 210, 0.6)';
+    g.lineWidth = 2.4;
+    g.stroke();
+  }
+  for (const r of race.mud) rect(r, 'rgba(120, 88, 56, 0.9)');
+  for (const r of race.water) rect(r, 'rgba(74, 134, 168, 0.95)');
+  for (const r of race.pads) rect(r, 'rgba(55, 230, 255, 0.95)');
+  for (const r of race.ramps) rect(r, 'rgba(232, 178, 26, 1)', r.len, r.w);
+  for (const r of race.gates) rect({ ...r, x: r.x, z: r.z }, 'rgba(255, 90, 60, 0.95)', 3, r.hw * 2);
+  for (const r of race.sliders) rect(r, 'rgba(255, 140, 60, 0.95)', 3, r.amp * 2 + r.len);
+  g.fillStyle = 'rgba(228, 85, 63, 0.95)';
+  for (const b of race.bumpers) {
+    g.beginPath();
+    g.arc(b.x, b.z, b.r, 0, Math.PI * 2);
+    g.fill();
+  }
+  race.cps.forEach((c, i) => rect(c, i ? 'rgba(245, 179, 18, 0.95)' : '#ffffff', i ? 1.6 : 3.4, c.hw * 2));
 }
 
 // Ajoute zone de capture et bases de départ (aperçu du salon).
@@ -106,6 +180,9 @@ export class Hud {
       scorebar: $('scorebar'), mission: $('mission'), mName: $('m-name'), mObj: $('m-obj'), mVal: $('m-val'), mFill: $('m-fill'),
       mLives: $('m-lives'), mTime: $('m-time'), boss: $('bossbar'), bossName: $('boss-name'), bossFill: $('boss-fill'), bossHp: $('boss-hp'),
       toasts: $('toasts'), buffs: $('buffs'), dmglog: $('dmglog'), spotted: $('spotted'),
+      racebar: $('racebar'), rbBoard: $('rb-board'), speedo: $('rb-speedo'), cpmark: $('cpmark'), cpmarkDist: $('cpmark-dist'), wrong: $('rb-wrong'),
+      rbEnd: $('rb-end'), rbEndTitle: $('rb-end-title'), rbEndSub: $('rb-end-sub'), helpRace: $('help-race'),
+      rbPos: $('rb-pos'), rbOf: $('rb-of'), rbTime: $('rb-time'), rbLap: $('rb-lap'), rbCp: $('rb-cp'), rbCpOf: $('rb-cpof'), spKmh: $('sp-kmh'), spFill: $('sp-fill'), spTag: $('sp-tag'),
     };
     this.dlog = { rows: [], total: { out: 0, in: 0 }, dirty: true, shown: false };
     this.tags = new Map();
@@ -193,6 +270,94 @@ export class Hud {
       d.append(name, gauge, count);
       return d;
     }));
+  }
+
+  // ---------------------------------------------------------------- course
+  setRaceMode(on) {
+    for (const e of [this.el.racebar, this.el.rbBoard, this.el.speedo, this.el.helpRace]) e.classList.toggle('hidden', !on);
+    this.el.scorebar.classList.toggle('hidden', on);
+    if (!on) for (const e of [this.el.cpmark, this.el.wrong, this.el.rbEnd]) e.classList.add('hidden');
+  }
+
+  // r = { pos, total, lap, laps, cp, cpTotal, time (ticks), rows: [{ id, name, css, lap, fin, me }], speed (km/h), ratio, boost, air, done: { rank, time } | null, grace (ticks) }
+  setRace(r) {
+    const el = this.el;
+    el.rbPos.textContent = r.pos;
+    el.rbOf.textContent = `/ ${r.total}`;
+    el.rbTime.textContent = fmtRaceTime(r.time);
+    el.rbLap.textContent = r.done ? 'Arrivé' : `Tour ${Math.min(r.lap, r.laps)} / ${r.laps}`;
+    el.rbCp.textContent = r.cp;
+    el.rbCpOf.textContent = `/ ${r.cpTotal}`;
+    el.spKmh.textContent = Math.round(r.speed);
+    el.spFill.style.width = `${Math.min(1, r.ratio) * 100}%`;
+    el.speedo.classList.toggle('boost', !!r.boost);
+    el.spTag.textContent = r.boost ? 'TURBO' : r.air ? 'EN VOL' : '';
+    const key = r.rows.map((p) => `${p.id}:${p.lap}:${p.fin}:${p.me ? 1 : 0}`).join('|');
+    if (el.rbBoard.dataset.key !== key) {
+      el.rbBoard.dataset.key = key;
+      el.rbBoard.replaceChildren(...r.rows.slice(0, 8).map((p, i) => {
+        const row = document.createElement('div');
+        row.style.setProperty('--c', p.css);
+        row.className = (p.me ? 'me ' : '') + (p.fin ? 'done' : '');
+        const pos = document.createElement('b'), dot = document.createElement('i'), name = document.createElement('span'), n = document.createElement('span');
+        pos.textContent = i + 1;
+        name.className = 'nm';
+        name.textContent = p.name;
+        n.className = 'n';
+        n.textContent = p.fin ? fmtRaceTime(p.fin) : `T${Math.min(p.lap, r.laps)}`;
+        row.append(pos, dot, name, n);
+        return row;
+      }));
+    }
+    el.rbEnd.classList.toggle('hidden', !r.done && !r.grace);
+    if (r.done) {
+      el.rbEndTitle.textContent = `${r.done.rank}${r.done.rank === 1 ? 'er' : 'e'} · ${fmtRaceTime(r.done.time)}`;
+      el.rbEndSub.textContent = r.grace ? `Fin de la course dans ${Math.ceil(r.grace / TICK_RATE)} s` : 'Course terminée';
+    } else if (r.grace) {
+      el.rbEndTitle.textContent = 'Dernier tour !';
+      el.rbEndSub.textContent = `Il reste ${Math.ceil(r.grace / TICK_RATE)} s pour finir`;
+    }
+  }
+
+  setWrongWay(on) {
+    this.el.wrong.classList.toggle('hidden', !on);
+  }
+
+  // Marqueur du prochain point de passage : m = { x, y, edge, dist } en pixels, ou null.
+  setCheckpointMarker(m) {
+    const e = this.el.cpmark;
+    e.classList.toggle('hidden', !m);
+    if (!m) return;
+    e.style.transform = `translate(${m.x}px, ${m.y}px)`;
+    e.classList.toggle('edge', !!m.edge);
+    this.el.cpmarkDist.textContent = `${Math.round(m.dist)} m`;
+  }
+
+  // Tableau du classement (Tab) : rows = [{ name, css, lap, fin, pen, pushes, me, bot }]
+  setRaceScoreboard(show, rows, laps) {
+    this.el.board.classList.toggle('hidden', !show);
+    if (!show) return;
+    const table = document.createElement('table');
+    table.innerHTML = '<tr><th>#</th><th>Pilote</th><th class="n">Tour</th><th class="n">Temps</th></tr>';
+    rows.forEach((p, i) => {
+      const tr = table.insertRow();
+      if (p.me) tr.className = 'me';
+      tr.insertCell().textContent = i + 1;
+      const name = tr.insertCell();
+      name.textContent = p.name;
+      name.style.color = p.css;
+      if (p.bot) {
+        const tag = document.createElement('small');
+        tag.textContent = 'bot';
+        name.append(tag);
+      }
+      for (const v of [`${Math.min(p.lap, laps)} / ${laps}`, p.fin ? fmtRaceTime(p.fin) : '—']) {
+        const td = tr.insertCell();
+        td.textContent = v;
+        td.className = 'n';
+      }
+    });
+    this.el.board.replaceChildren(table);
   }
 
   setScore(score) {
@@ -298,7 +463,8 @@ export class Hud {
         this.el.tags.append(el);
         this.tags.set(t.id, el);
       }
-      el.className = `c-${t.team}${t.obj ? ' obj' : ''}${t.marked ? ' marked' : ''}`;
+      el.className = `c-${t.team}${t.obj ? ' obj' : ''}${t.marked ? ' marked' : ''}${t.css ? ' race' : ''}`;
+      el.style.color = t.css ?? ''; // course : couleur du pilote, pas de barre de vie
       el.firstChild.textContent = t.name;
       el.fill.style.width = `${t.hpRatio * 100}%`;
       el.style.left = `${t.x}px`;
@@ -580,7 +746,7 @@ export class Hud {
       g.save();
       g.translate(d.x, d.z);
       g.globalAlpha = d.alive ? 1 : 0.35;
-      g.fillStyle = d.obj && d.alive ? '#f5b312' : TEAM_INFO[d.team].css;
+      g.fillStyle = d.obj && d.alive ? '#f5b312' : d.css ?? TEAM_INFO[d.team].css;
       if (d.fixed) {
         // tourelles et bâtiments : carrés (plus gros pour les objectifs et les boss)
         const r = d.size ?? 2;
@@ -619,7 +785,7 @@ export class Hud {
         g.lineWidth = 3;
         g.strokeStyle = 'rgba(11, 13, 10, 0.85)';
         g.strokeText(d.name, 0, -12);
-        g.fillStyle = d.me ? '#fff' : TEAM_INFO[d.team].css;
+        g.fillStyle = d.me ? '#fff' : d.css ?? TEAM_INFO[d.team].css;
         g.fillText(d.name, 0, -12);
         g.restore();
       }

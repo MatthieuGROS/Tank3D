@@ -3,7 +3,8 @@
 // sans divergence avec le serveur.
 
 import { DT, ACCURACY } from './constants.js';
-import { collideCircle, collideDiscs, slopeAlong, heightAt } from './map.js';
+import { collideCircle, collideDiscs, slopeAlong, heightAt, groundAt } from './map.js';
+import { RACE_RULES, VOID_Y, raceDef, surfaceAt, solidAt, launchAt, SURF_MUD, SURF_PAD, dynBoxes, collideOBB, mudFactor } from './race.js';
 
 const TAU = Math.PI * 2;
 export const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -20,7 +21,8 @@ export const lerpAngle = (a, b, t) => a + angleDiff(a, b) * t;
 // yaw = 0 regarde vers +Z ; l'avant vaut (sin yaw, cos yaw). yaw croissant = virage à gauche.
 export function createTankState(x, z, yaw) {
   // rof : multiplicateur de rechargement (bonus) ; aim : « flou » de visée restant (0 = canon réglé, voir stepTank)
-  return { x, z, yaw, speed: 0, ty: yaw, reload: 0, rof: 1, aim: ACCURACY.spawnExtra };
+  // Course : y = altitude, vy = vitesse verticale, air = en l'air, kx/kz = poussée reçue (m/s), boost = ticks de turbo restants
+  return { x, z, yaw, speed: 0, ty: yaw, reload: 0, rof: 1, aim: ACCURACY.spawnExtra, y: 0, vy: 0, air: false, kx: 0, kz: 0, kw: 0, boost: 0 };
 }
 
 // Commande d'un tick : f = avancer (-1..1), t = tourner la caisse (-1..1, + = gauche),
@@ -34,7 +36,16 @@ export function sanitizeInput(raw) {
 
 // Avance l'état `s` d'un tick. `others` = disques des autres chars. `frozen` = compte à rebours
 // (seule la tourelle bouge). Renvoie true si le char a tiré pendant ce tick.
-export function stepTank(s, inp, def, map, others, frozen) {
+// `clock` = ticks écoulés depuis le feu vert (course : portes et barres mobiles en dépendent).
+export function stepTank(s, inp, def, map, others, frozen, clock = 0) {
+  const t = frozen ? 0 : inp.t;
+  if (map.race) stepRaceDrive(s, inp, raceDef(def), map, others, frozen, clock);
+  else stepDrive(s, inp, def, map, others, frozen);
+  return stepGun(s, inp, def, t, frozen);
+}
+
+// Déplacement du char (escarmouche et campagne).
+function stepDrive(s, inp, def, map, others, frozen) {
   const f = frozen ? 0 : inp.f;
   const t = frozen ? 0 : inp.t;
 
@@ -66,7 +77,148 @@ export function stepTank(s, inp, def, map, others, frozen) {
       s.speed = s.speed > 0 ? clamp(along, 0, s.speed) : clamp(along, s.speed, 0);
     }
   }
+}
 
+// Déplacement en course : turbo, boue, poussée des tirs, bumpers, portes mobiles, tremplins et vol.
+function stepRaceDrive(s, inp, def, map, others, frozen, clock) {
+  const race = map.race;
+  const f = frozen ? 0 : inp.f;
+  const t = frozen ? 0 : inp.t;
+  s.hard = 0;
+  const air = !!s.air;
+
+  // surface sous le char : un tapis déclenche (ou prolonge) le turbo, la boue ralentit
+  const surf = air ? 0 : surfaceAt(race, s.x, s.z);
+  if (surf & SURF_PAD) s.boost = RACE_RULES.boostTicks;
+  else if (s.boost > 0) s.boost--;
+  const boosted = s.boost > 0;
+  // lanceur (plaque de gravité) : le char décolle à la verticale, il garde sa vitesse horizontale
+  if (!air && race.launch.length) {
+    const pad = launchAt(race, s.x, s.z);
+    if (pad) {
+      s.air = true;
+      s.vy = pad.vy;
+      s.y += 0.02;
+      if (pad.kick && s.speed > 0 && s.speed < pad.kick) s.speed = pad.kick; // le lanceur donne aussi de l'élan : la portée ne dépend pas du char
+    }
+  }
+
+  if (!air) {
+    const maxV = def.maxSpeed * (boosted ? RACE_RULES.boostSpeed : 1);
+    // le turbo pousse tout seul en avant, même sans accélérer
+    const drive = boosted && f >= 0 ? 1 : f;
+    let target = drive > 0 ? drive * maxV : drive * def.reverseSpeed;
+    if (surf & SURF_MUD) target *= mudFactor(def);
+    if ((map.hills || race.floor) && target !== 0) {
+      const dir = target > 0 ? 1 : -1;
+      target *= clamp(1 - 1.3 * slopeAlong(s.x, s.z, Math.sin(s.yaw) * dir, Math.cos(s.yaw) * dir, map), 0.5, 1.25);
+    }
+    const speedingUp = target !== 0 && target * s.speed >= 0 && Math.abs(target) > Math.abs(s.speed);
+    const maxDelta = (speedingUp ? def.accel * (boosted ? RACE_RULES.boostAccel : 1) : def.brake) * DT;
+    s.speed += clamp(target - s.speed, -maxDelta, maxDelta);
+  }
+  // en l'air on ne peut ni accélérer ni freiner, seulement orienter un peu la caisse
+  s.yaw = wrapAngle(s.yaw + t * def.turnRate * (air ? 0.35 : 1) * DT);
+
+  // dérapage après un tir : la caisse tourne sur elle-même mais l'élan garde sa direction.
+  // La part de la vitesse qui n'est plus dans l'axe du char passe en glissade latérale (kx/kz, freinée par le sol).
+  if (s.kw) {
+    const bx = Math.sin(s.yaw), bz = Math.cos(s.yaw);
+    s.yaw = wrapAngle(s.yaw + s.kw * DT);
+    const nx = Math.sin(s.yaw), nz = Math.cos(s.yaw);
+    const vx = bx * s.speed, vz = bz * s.speed;
+    s.speed = vx * nx + vz * nz;
+    s.kx = (s.kx || 0) + vx - nx * s.speed;
+    s.kz = (s.kz || 0) + vz - nz * s.speed;
+    s.kw *= Math.exp(-(air ? RACE_RULES.airSpinDecay : RACE_RULES.spinDecay) * DT);
+    if (Math.abs(s.kw) < 0.05) s.kw = 0;
+  }
+
+  const ox = s.x, oz = s.z;
+  const fx = Math.sin(s.yaw), fz = Math.cos(s.yaw);
+  if (s.speed !== 0) {
+    s.x += fx * s.speed * DT;
+    s.z += fz * s.speed * DT;
+    if (collideRace(s, def.radius, map, others, clock)) {
+      const along = ((s.x - ox) * fx + (s.z - oz) * fz) / DT;
+      s.speed = s.speed > 0 ? clamp(along, 0, s.speed) : clamp(along, s.speed, 0);
+    }
+  }
+
+  // poussée reçue (tirs) : glisse sur le sol, plus longtemps en l'air
+  if (s.kx || s.kz) {
+    s.x += s.kx * DT;
+    s.z += s.kz * DT;
+    const hit = collideRace(s, def.radius, map, others, clock);
+    const decay = Math.exp(-(air ? RACE_RULES.airDecay : RACE_RULES.knockDecay) * DT);
+    s.kx *= decay;
+    s.kz *= decay;
+    if (hit) { s.kx *= 0.5; s.kz *= 0.5; }
+    if (s.kx * s.kx + s.kz * s.kz < 0.04) s.kx = s.kz = 0;
+  }
+
+  // bumpers : le char est renvoyé comme une bille de flipper
+  for (const b of race.bumpers) {
+    const dx = s.x - b.x, dz = s.z - b.z, min = def.radius + b.r;
+    const d2 = dx * dx + dz * dz;
+    if (d2 >= min * min) continue;
+    const d = Math.sqrt(d2) || 1, nx = d2 > 1e-9 ? dx / d : -fx, nz = d2 > 1e-9 ? dz / d : -fz;
+    s.x = b.x + nx * min;
+    s.z = b.z + nz * min;
+    s.kx = nx * 15;
+    s.kz = nz * 15;
+    s.speed *= 0.3;
+  }
+
+  // altitude : le char suit le sol ; si le sol se dérobe d'un coup (bout d'un tremplin) il décolle avec la pente remontée.
+  // Au-dessus du vide (circuit sans sol hors de la piste, tuiles qui s'effacent) le « sol » est très loin en dessous : on tombe.
+  let g = heightAt(s.x, s.z, map);
+  if (race.floor && !solidAt(race, s.x, s.z, clock)) g = VOID_Y;
+  if (!s.air) {
+    if (s.y - g > Math.max(0.15, Math.abs(s.speed) * DT * 0.8)) {
+      const dir = s.speed >= 0 ? 1 : -1, e = 1.2;
+      const slope = (heightAt(ox, oz, map) - heightAt(ox - Math.sin(s.yaw) * dir * e, oz - Math.cos(s.yaw) * dir * e, map)) / e;
+      s.air = true;
+      s.vy = clamp(slope * Math.abs(s.speed), -6, 16);
+      s.y += s.vy * DT;
+    } else {
+      s.y = g;
+    }
+  } else {
+    s.vy -= RACE_RULES.gravity * DT;
+    s.y += s.vy * DT;
+    if (s.y <= g) {
+      s.hard = Math.max(0, -s.vy); // vitesse d'impact (secousse, poussière)
+      s.y = g;
+      s.vy = 0;
+      s.air = false;
+    }
+  }
+}
+
+// Collisions d'un char de course : décor, barres et portes mobiles, autres chars. Renvoie true s'il y a eu contact.
+function collideRace(s, r, map, others, clock) {
+  let hit = collideCircle(s, r, map);
+  for (const b of dynBoxes(map.race, clock)) {
+    if (b.br !== undefined) { // rejet rapide : boîte trop loin pour toucher le char (beaucoup de garde-fous sur le circuit au-dessus du vide)
+      const dx = b.x - s.x, dz = b.z - s.z, far = b.br + r + 0.5;
+      if (dx * dx + dz * dz > far * far) continue;
+    }
+    if (s.air) {
+      const gb = groundAt(b.x, b.z, map);
+      if (s.y > gb + b.h + 0.2 || s.y < gb - 0.8) continue; // on survole l'obstacle, ou on est tombé sous la piste
+    }
+    if (collideOBB(s, r, b)) hit = true;
+  }
+  if (others && collideDiscs(s, r, others)) {
+    hit = true;
+    collideCircle(s, r, map);
+  }
+  return hit;
+}
+
+// Tourelle, précision et rechargement ; renvoie true si le char a tiré pendant ce tick.
+function stepGun(s, inp, def, t, frozen) {
   const ty0 = s.ty;
   s.ty = wrapAngle(s.ty + inp.tt * def.turretRate * DT);
   // canon en casemate : il suit la caisse et ne pivote que de ±traverse autour de son axe
@@ -167,7 +319,8 @@ export function autoPitch(x, z, ty, y0, targets, map, shellSpeed = 100) {
     const fx = px + vx * t, fz = pz + vz * t; // position du char à ce moment-là
     if (Math.hypot(fx - dx * s, fz - dz * s) > Math.max(1.5, s * AUTO_AIM_CONE)) continue;
     bestS = s;
-    best = (heightAt(x + fx, z + fz, map) + 1.0 - y0) / s;
+    const gy = map.race && o.y !== undefined ? o.y : heightAt(x + fx, z + fz, map); // course : un char en vol est visé là où il est
+    best = (gy + 1.0 - y0) / s;
   }
   return best === undefined ? undefined : clamp(best, -0.6, 0.6);
 }

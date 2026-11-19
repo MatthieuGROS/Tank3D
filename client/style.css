@@ -227,7 +227,7 @@ input:focus { box-shadow: inset 0 0 0 1px var(--amber), 0 0 0 3px rgba(245, 179,
 }
 
 /* ---------- campagne : salon ---------- */
-.mode-campaign .skirmish-only, .mode-skirmish .campaign-only { display: none !important; }
+.mode-campaign .skirmish-only, .mode-race .skirmish-only, .mode-skirmish .campaign-only, .mode-race .campaign-only, .mode-skirmish .race-only, .mode-campaign .race-only { display: none !important; }
 
 /* ---------- campagne : HUD ---------- */
 #mission { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 380px; padding: 7px 16px 9px; background: rgba(11, 13, 10, 0.88); border-bottom: 3px solid var(--amber); clip-path: polygon(0 0, 100% 0, calc(100% - 16px) 100%, 16px 100%); }
@@ -269,7 +269,7 @@ input:focus { box-shadow: inset 0 0 0 1px var(--amber), 0 0 0 3px rgba(245, 179,
 #tags > div.obj span::before { content: "◆ "; }
 
 /* ---------- campagne : rapport de mission ---------- */
-#screen-debrief { display: flex; align-items: center; justify-content: center; background: radial-gradient(ellipse at center, rgba(11, 13, 10, 0.75), rgba(11, 13, 10, 0.95)); z-index: 5; }
+#screen-debrief, #screen-raceend { display: flex; align-items: center; justify-content: center; background: radial-gradient(ellipse at center, rgba(11, 13, 10, 0.75), rgba(11, 13, 10, 0.95)); z-index: 5; }
 .debrief { position: relative; z-index: 1; width: min(620px, 92vw); display: grid; gap: 14px; }
 .debrief .hazard { width: 180px; }
 #db-title.fail { color: var(--red); }
@@ -412,6 +412,7 @@ body.spectating #chat { bottom: 120px; }
 #tags .hpline { position: relative; }
 #tags .tgt { display: none; position: absolute; left: calc(50% + 30px); top: 50%; width: 18px; height: 18px; margin-top: -9px; color: #ff5a3c; filter: drop-shadow(0 0 2px #000); animation: tgtpulse 0.8s ease-in-out infinite alternate; }
 #tags > div.marked .tgt { display: block; }
+#tags > div.race .hpline { display: none; }
 #tags > div.marked span { color: #ff8a70; }
 @keyframes tgtpulse { from { transform: scale(0.85); } to { transform: scale(1.1); } }
 @media (prefers-reduced-motion: reduce) {
@@ -445,3 +446,51 @@ body.spectating #chat { bottom: 120px; }
 .db-table td small { margin-left: 6px; font-size: 11px; color: var(--dim); }
 
 .rp-actions { display: flex; gap: 8px; }
+
+/* ---------- course : HUD ---------- */
+.mode-race #scorebar, .mode-race #spotted, .mode-race #killfeed, .mode-race #cap, .mode-race #help, .mode-race #buffs { display: none !important; }
+.mode-race #status .seg, .mode-race #status #hp-text { display: none; }
+#racebar { position: absolute; top: 0; left: 50%; transform: translateX(-50%); display: flex; align-items: stretch; filter: drop-shadow(0 3px 0 rgba(0, 0, 0, 0.35)); }
+.rb-block { display: flex; align-items: baseline; gap: 8px; padding: 6px 20px 7px; background: rgba(11, 13, 10, 0.9); }
+.rb-block small { align-self: center; font-size: 10px; letter-spacing: 0.22em; color: var(--dim); }
+.rb-block b { font-size: 40px; font-weight: 700; font-stretch: 75%; line-height: 1; color: var(--amber); font-variant-numeric: tabular-nums; }
+.rb-block em { font-style: normal; font-size: 15px; color: var(--dim); }
+.rb-pos { clip-path: polygon(0 0, 100% 0, 100% 100%, 22px 100%); padding-left: 32px; border-bottom: 3px solid var(--amber); }
+.rb-cp { clip-path: polygon(0 0, 100% 0, calc(100% - 22px) 100%, 0 100%); padding-right: 32px; border-bottom: 3px solid var(--amber); }
+.rb-cp b { color: var(--bone); font-size: 30px; }
+.rb-mid { flex-direction: column; align-items: center; gap: 1px; min-width: 150px; background: var(--ink); border-bottom: 3px solid var(--amber); }
+#rb-time { font-size: 28px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+#rb-lap { font-size: 11px; letter-spacing: 0.22em; color: var(--amber); }
+#rb-board { position: absolute; top: 74px; left: 0; width: 230px; display: grid; gap: 2px; }
+#rb-board div { display: grid; grid-template-columns: 22px 10px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 3px 12px 3px 8px; font-size: 13px; letter-spacing: 0.08em; background: rgba(11, 13, 10, 0.8); border-left: 4px solid var(--c, var(--dim)); }
+#rb-board div.me { background: linear-gradient(rgba(245, 179, 18, 0.26), rgba(245, 179, 18, 0.26)), rgba(11, 13, 10, 0.92); font-weight: 700; }
+#rb-board div i { width: 8px; height: 8px; background: var(--c); transform: rotate(45deg); }
+#rb-board div .n { text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+#rb-board div .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#rb-board div.done .n { color: #a5f09a; }
+#rb-speedo { position: absolute; right: 262px; bottom: 22px; width: 190px; padding: 8px 14px 10px; background: rgba(11, 13, 10, 0.88); border-right: 5px solid var(--amber); clip-path: polygon(18px 0, 100% 0, 100% 100%, 0 100%); text-align: right; }
+.sp-main { display: flex; align-items: baseline; justify-content: flex-end; gap: 8px; }
+#sp-kmh { font-size: 54px; font-weight: 700; font-stretch: 75%; line-height: 1; font-variant-numeric: tabular-nums; }
+.sp-main small { font-size: 12px; letter-spacing: 0.2em; color: var(--dim); }
+#sp-tag { min-width: 3.4em; font-size: 12px; font-weight: 700; letter-spacing: 0.2em; color: #37e6ff; text-align: right; }
+.sp-bar { height: 6px; margin-top: 6px; background: #080a07; box-shadow: inset 0 0 0 1px var(--line); }
+#sp-fill { height: 100%; width: 0; background: var(--amber); transition: background 0.15s; }
+#rb-speedo.boost #sp-fill { background: #37e6ff; box-shadow: 0 0 10px #37e6ff; }
+#rb-speedo.boost #sp-kmh { color: #9af0ff; }
+#cpmark { position: absolute; left: 0; top: 0; width: 44px; margin: -22px 0 0 -22px; display: grid; justify-items: center; color: #66ff9a; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.8)); }
+#cpmark svg { width: 38px; height: 38px; fill: rgba(102, 255, 154, 0.28); stroke: currentColor; stroke-width: 3; }
+#cpmark span { margin-top: -2px; padding: 0 6px; font-size: 13px; font-weight: 700; letter-spacing: 0.08em; background: rgba(11, 13, 10, 0.8); white-space: nowrap; }
+#cpmark.edge svg { animation: rb-pulse 0.8s ease-in-out infinite alternate; }
+@keyframes rb-pulse { from { transform: scale(0.9); } to { transform: scale(1.12); } }
+#rb-wrong { position: absolute; top: 34%; left: 0; right: 0; text-align: center; font-size: clamp(30px, 5vw, 56px); font-weight: 700; font-stretch: 75%; letter-spacing: 0.1em; color: var(--red); text-shadow: 0 3px 0 rgba(0, 0, 0, 0.6); animation: rb-pulse 0.5s ease-in-out infinite alternate; }
+#rb-end { position: absolute; top: 74px; right: 22px; display: grid; justify-items: end; gap: 2px; padding: 8px 16px; background: rgba(11, 13, 10, 0.9); border-right: 5px solid var(--amber); text-align: right; }
+#rb-end b { font-size: 24px; letter-spacing: 0.06em; color: var(--amber); }
+#rb-end span { font-size: 12px; letter-spacing: 0.16em; color: var(--dim); }
+#help-race { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); font-size: 11px; letter-spacing: 0.12em; color: rgba(233, 229, 211, 0.8); white-space: nowrap; text-shadow: 0 1px 2px #000; }
+#help-race kbd { margin-left: 8px; }
+body.spectating #help-race, body.spectating #rb-speedo { display: none; }
+#re-facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+#re-facts div { padding: 8px 10px; background: var(--panel); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim); }
+#re-facts b { display: block; margin-top: 2px; font-size: 22px; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
+#re-wait { color: var(--dim); font-size: 13px; }
+.db-table .dim { color: var(--dim); }

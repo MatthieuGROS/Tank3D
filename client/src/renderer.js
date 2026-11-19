@@ -104,6 +104,10 @@ export class Renderer {
     this.sun.intensity = theme.sun[1];
     for (const pk of this.pickups.values()) this.scene.remove(pk.group);
     this.pickups.clear();
+    // circuit au-dessus du vide : le ciel et les planètes sont loin, la caméra voit plus loin (et un peu moins près)
+    this.camera.far = map.race?.floor ? 1500 : 600;
+    this.camera.near = map.race?.floor ? 0.5 : 0.3;
+    this.camera.updateProjectionMatrix();
     this.mapModel = createMapModel(map);
     this.zone = this.mapModel.zone;
     this.scene.add(this.mapModel.group);
@@ -122,11 +126,12 @@ export class Renderer {
 
   // ------------------------------------------------------------------ chars
 
-  makeTank(type, team, skin = DEFAULT_SKIN) {
-    const idColor = TEAM_INFO[team]?.color ?? null;
+  // color : couleur d'identification d'un pilote de course (sinon celle de son équipe)
+  makeTank(type, team, skin = DEFAULT_SKIN, color = null) {
+    const idColor = color ?? TEAM_INFO[team]?.color ?? null;
     const t = {
       // sans équipe (salon) : vert kaki neutre
-      model: createTankModel(type, idColor ?? 0x6f7a52, { skin: SKINS[skin] ?? SKINS[DEFAULT_SKIN], idColor }), type, team, skin, wrecked: false,
+      model: createTankModel(type, idColor ?? 0x6f7a52, { skin: SKINS[skin] ?? SKINS[DEFAULT_SKIN], idColor }), type, team, skin, color, wrecked: false,
       recoil: 0, pitch: 0, pitchV: 0, roll: 0, rollV: 0,
       lastSpeed: 0, lastYaw: null, accel: 0, wheel: 0, dust: 0, mark: 0, exhaust: 0, smoke: 0,
     };
@@ -166,9 +171,9 @@ export class Renderer {
     let ghosts = 0;
     for (const [id, v] of views) {
       let t = this.tanks.get(id);
-      if (!t || t.team !== v.team || t.type !== v.type || t.skin !== v.skin) {
+      if (!t || t.team !== v.team || t.type !== v.type || t.skin !== v.skin || t.color !== (v.color ?? null)) {
         if (t) this.dropTank(t);
-        t = this.makeTank(v.type, v.team, v.skin);
+        t = this.makeTank(v.type, v.team, v.skin, v.color ?? null);
         this.tanks.set(id, t);
       }
       if (t.wrecked !== !v.alive) {
@@ -206,17 +211,28 @@ export class Renderer {
 
     // relief : le char suit le sol et s'incline sur la pente (0 partout sur une carte plate)
     let gy = 0;
-    if (this.map?.hills) {
+    const race = !!this.map?.race;
+    if (this.map?.hills || race) {
       const map = this.map, hl = m.trackX ?? 1.6, hz = 2;
-      gy = heightAt(v.x, v.z, map);
+      gy = race && v.y !== undefined ? v.y : heightAt(v.x, v.z, map); // course : l'altitude vient de la simulation (vol, tremplin)
       const front = heightAt(wx(0, hz), wz(0, hz), map), back = heightAt(wx(0, -hz), wz(0, -hz), map);
       const left = heightAt(wx(hl, 0), wz(hl, 0), map), right = heightAt(wx(-hl, 0), wz(-hl, 0), map);
       const k = Math.min(1, dt * 10);
-      t.slopePitch = (t.slopePitch ?? 0) + (-Math.atan2(front - back, 2 * hz) - (t.slopePitch ?? 0)) * k;
-      t.slopeRoll = (t.slopeRoll ?? 0) + (Math.atan2(left - right, 2 * hl) - (t.slopeRoll ?? 0)) * k;
+      // en vol le nez suit la trajectoire (monte puis plonge) ; au sol la caisse suit la pente
+      const pitchGoal = race && v.air ? clamp(-Math.atan2(v.vy ?? 0, Math.max(6, Math.abs(speed))), -0.75, 0.75) : -Math.atan2(front - back, 2 * hz);
+      const rollGoal = race && v.air ? 0 : Math.atan2(left - right, 2 * hl);
+      const kk = race && v.air ? Math.min(1, dt * 5) : k;
+      t.slopePitch = (t.slopePitch ?? 0) + (pitchGoal - (t.slopePitch ?? 0)) * kk;
+      t.slopeRoll = (t.slopeRoll ?? 0) + (rollGoal - (t.slopeRoll ?? 0)) * kk;
       m.group.rotation.order = 'YXZ';
       m.group.rotation.x = t.slopePitch;
       m.group.rotation.z = t.slopeRoll;
+    }
+    if (race) {
+      // atterrissage : poussière et secousse proportionnelles à la vitesse d'impact
+      if (v.air) t.lastVy = v.vy ?? 0;
+      else if (t.wasAir) this.onLand?.(v, Math.max(0, -(t.lastVy ?? 0)), gy);
+      t.wasAir = !!v.air;
     }
     m.group.position.set(v.x, gy, v.z);
     m.group.rotation.y = v.yaw;
@@ -266,7 +282,15 @@ export class Renderer {
       }
     }
 
-    if (v.alive && !m.static) {
+    if (race && v.boost && v.alive && !v.air) {
+      // turbo : flammes à l'échappement
+      t.boostFx = (t.boostFx ?? 0) - dt;
+      if (t.boostFx <= 0) {
+        t.boostFx = 0.035;
+        for (const [ex, ey, ez] of m.exhausts) fx.flame(wx(ex, ez), gy + ey, wz(ex, ez));
+      }
+    }
+    if (v.alive && !m.static && !v.air) {
       const dir = Math.sign(speed) || 1;
       // traces de chenilles
       t.mark += moved;
@@ -391,18 +415,30 @@ export class Renderer {
   // ----------------------------------------------------------------- caméra
 
   // Caméra à la 3e personne derrière la tourelle de la cible.
-  followCamera(x, z, yaw, dt, snap) {
+  // y / speedRatio : course. y = altitude du char (la caméra la suit avec retard : on voit le saut), speedRatio = vitesse / vitesse max (champ de vision).
+  followCamera(x, z, yaw, dt, snap, y, speedRatio = 0) {
     this.camYaw = snap ? yaw : lerpAngle(this.camYaw, yaw, 1 - Math.exp(-dt * 9));
     const cp = Math.cos(CAM_PITCH);
     const dx = Math.sin(this.camYaw) * cp, dy = Math.sin(CAM_PITCH), dz = Math.cos(this.camYaw) * cp;
     // on rapproche la caméra si un obstacle se trouve entre elle et le char
     // (test aussi 1,3 m plus bas pour garder une marge au-dessus des obstacles)
-    const low = (px, py, pz) => pointBlocked(px, py - 1.3, pz, this.map);
-    const gy = heightAt(x, z, this.map); // la caméra suit le relief
-    const free = marchRay(x, gy + CAM_TARGET_Y, z, -dx, -dy, -dz, CAM_DIST, 0.5, this.map, low);
+    // course : les tremplins ne bloquent pas la caméra (sinon elle se retrouve dans le char pendant un saut)
+    if (this.map.race && this.camMapSrc !== this.map) {
+      this.camMapSrc = this.map;
+      this.camMap = { ...this.map, race: undefined };
+    }
+    const cmap = this.map.race ? this.camMap : this.map;
+    const low = (px, py, pz) => pointBlocked(px, py - 1.3, pz, cmap);
+    let gy = heightAt(x, z, this.map); // la caméra suit le relief
+    if (this.map.race && y !== undefined) {
+      this.camBase = snap || this.camBase === undefined ? y : this.camBase + (y - this.camBase) * (1 - Math.exp(-dt * (y > this.camBase ? 5 : 3.2)));
+      gy = this.camBase;
+    }
+    this.setFov(this.map.race ? 58 + 15 * clamp(speedRatio - 0.55, 0, 0.9) : 58);
+    const free = marchRay(x, gy + CAM_TARGET_Y, z, -dx, -dy, -dz, CAM_DIST, 0.5, cmap, low);
     const wanted = Math.max(3, free < CAM_DIST ? free - 0.6 : CAM_DIST);
     this.camDist = wanted < this.camDist ? wanted : this.camDist + (wanted - this.camDist) * (1 - Math.exp(-dt * 4));
-    if (this.map.hills) {
+    if (this.map.hills || this.map.race) {
       // grande carte : le cadre d'ombre suit le joueur au lieu de couvrir toute la carte
       this.sun.position.set(x + 45, 80, z + 30);
       this.sun.target.position.set(x, 0, z);
@@ -421,6 +457,7 @@ export class Renderer {
 
   // Caméra libre (spectateur) : position et orientation (cap, plongée) données directement.
   freeCamera(x, y, z, yaw, pitch) {
+    this.setFov(58);
     const cp = Math.cos(pitch);
     this.camYaw = yaw;
     this.camera.position.set(x, y, z);
@@ -429,6 +466,7 @@ export class Renderer {
 
   // Salon : la caméra tourne lentement autour du char exposé.
   garageCamera(time) {
+    this.setFov(58);
     const z = this.focus(), a = time * 0.22 + 0.6;
     const gy = heightAt(z.x, z.z, this.map); // la zone peut être au sommet d'une colline
     this.camera.position.set(z.x + Math.sin(a) * 11.5, gy + 3.6, z.z + Math.cos(a) * 11.5);
@@ -438,10 +476,22 @@ export class Renderer {
 
   // Vue d'ensemble tournante (écran d'accueil, fin de partie).
   orbitCamera(time) {
+    this.setFov(58);
     const a = time * 0.08;
     const r = Math.max(85, Math.max(this.map.halfX, this.map.halfZ) * 1.25);
     this.camera.position.set(Math.sin(a) * r, 48 + r * 0.1, Math.cos(a) * r);
     this.camera.lookAt(0, 0, 0);
+  }
+
+  setFov(fov) {
+    if (Math.abs(this.camera.fov - fov) < 0.02) return;
+    this.camera.fov += (fov - this.camera.fov) * 0.15;
+    this.camera.updateProjectionMatrix();
+  }
+
+  // Course : anime le décor du circuit (portes, barres, tapis, point de passage à franchir).
+  updateRace(clock, time, next) {
+    this.mapModel?.race?.update(clock, time, next);
   }
 
   // Monde -> pixels écran. `front` est faux si le point est derrière la caméra.

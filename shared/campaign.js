@@ -15,7 +15,7 @@
 //   reinforce  { first, every, cap, groups: [[{ t, n }], ...] } : renforts réguliers (groupes en boucle)
 //   pickups    bonus posés sur la carte : { k, x, z }
 //   par        temps de référence (s) pour la 2e étoile
-import { MAPS, collideCircle } from './map.js';
+import { MAPS, RACE_MAPS, DEFAULT_RACE_MAP, collideCircle } from './map.js';
 import { bld, wall, crate, rock, tree, dune } from './props.js';
 
 const PI = Math.PI;
@@ -325,8 +325,9 @@ export const MISSIONS = [
 export const MISSION_INDEX = Object.fromEntries(MISSIONS.map((m, i) => [m.id, i]));
 export const getMission = (id) => MISSIONS[MISSION_INDEX[id]] ?? MISSIONS[0];
 
-// Carte jouée selon les réglages du salon (escarmouche ou mission de campagne).
+// Carte jouée selon les réglages du salon (escarmouche, mission de campagne ou circuit de course).
 export function mapFor(settings) {
   if (settings?.mode === 'campaign') return getMission(settings.mission).map;
+  if (settings?.mode === 'race') return RACE_MAPS[settings.raceMap] ?? RACE_MAPS[DEFAULT_RACE_MAP];
   return MAPS[settings?.map] ?? Object.values(MAPS)[0];
 }

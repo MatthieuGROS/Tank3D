@@ -61,7 +61,7 @@ export class Effects {
 
   // Hauteur du sol en (x, z) : 0 sur une carte plate.
   ground(x, z) {
-    return this.map?.hills ? heightAt(x, z, this.map) : 0;
+    return this.map?.hills || this.map?.race?.floor ? heightAt(x, z, this.map) : 0;
   }
 
   // ---------------------------------------------------------------- obus
@@ -306,7 +306,7 @@ export class Effects {
       p.vz *= k;
       p.vy -= p.gravity * dt;
       p.mesh.position.x += p.vx * dt;
-      p.mesh.position.y = Math.max(0.05 + (this.map?.hills ? heightAt(p.mesh.position.x, p.mesh.position.z, this.map) : 0), p.mesh.position.y + p.vy * dt);
+      p.mesh.position.y = Math.max(0.05 + (this.map?.hills || this.map?.race?.floor ? heightAt(p.mesh.position.x, p.mesh.position.z, this.map) : 0), p.mesh.position.y + p.vy * dt);
       p.mesh.position.z += p.vz * dt;
       if (p.spin) p.mesh.rotation.x += p.spin * dt;
       p.mesh.scale.setScalar(p.s0 + (p.s1 - p.s0) * (1 - (1 - t) * (1 - t)));
@@ -347,11 +347,12 @@ export class Effects {
 
   // Bonus ramassé / réapparition : anneau coloré qui s'élargit + étincelles.
   burst(x, z, color, size = 1) {
-    this.particle({ geo: this.geo.ring, flat: true, color, x, y: this.ground(x, z) + 0.2, z, life: 0.6, s0: 0.5 * size, s1: 6 * size, opacity: 0.8 });
+    const g = this.ground(x, z);
+    this.particle({ geo: this.geo.ring, flat: true, color, x, y: g + 0.2, z, life: 0.6, s0: 0.5 * size, s1: 6 * size, opacity: 0.8 });
     for (let i = 0; i < 14; i++) {
-      this.particle({ geo: this.geo.shard, color, x, y: 1, z, vx: rnd(-5, 5), vy: rnd(3, 9), vz: rnd(-5, 5), life: rnd(0.4, 0.8), s0: 0.16, s1: 0.04, gravity: 14 });
+      this.particle({ geo: this.geo.shard, color, x, y: g + 1, z, vx: rnd(-5, 5), vy: rnd(3, 9), vz: rnd(-5, 5), life: rnd(0.4, 0.8), s0: 0.16, s1: 0.04, gravity: 14 });
     }
-    this.flashLight(x, 2, z, 120, 0.3, color);
+    this.flashLight(x, g + 2, z, 120, 0.3, color);
   }
 
   // Point de chute visé par l'obusier du joueur : cercle blanc au sol (rayon du souffle). null = masqué.

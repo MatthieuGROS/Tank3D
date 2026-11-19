@@ -2,10 +2,16 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0a0b09">
+  <link rel="manifest" href="manifest.webmanifest">
   <title>Tank 3D</title>
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="hub.css">
+  <link rel="stylesheet" href="touch.css">
   <script type="importmap">{ "imports": { "three": "/vendor/three/three.module.js" } }</script>
 </head>
 <body>
@@ -40,6 +46,24 @@
     </div>
     <div id="toasts"></div>
 
+    <!-- ===== HUD du mode course ===== -->
+    <div id="racebar" class="hidden">
+      <div class="rb-block rb-pos"><small>Position</small><b id="rb-pos">1</b><em id="rb-of">/ 8</em></div>
+      <div class="rb-block rb-mid"><div id="rb-time">0:00.0</div><div id="rb-lap">Tour 1 / 2</div></div>
+      <div class="rb-block rb-cp"><small>Points</small><b id="rb-cp">0</b><em id="rb-cpof">/ 13</em></div>
+    </div>
+    <div id="rb-board" class="hidden"></div>
+    <div id="rb-speedo" class="hidden">
+      <div class="sp-main"><b id="sp-kmh">0</b><small>km/h</small><span id="sp-tag"></span></div>
+      <div class="sp-bar"><div id="sp-fill"></div></div>
+    </div>
+    <div id="cpmark" class="hidden">
+      <svg viewBox="0 0 40 40" aria-hidden="true"><path d="M20 3 L37 20 L20 37 L3 20 Z"/></svg>
+      <span id="cpmark-dist"></span>
+    </div>
+    <div id="rb-wrong" class="hidden">Mauvais sens !</div>
+    <div id="rb-end" class="hidden"><b id="rb-end-title"></b><span id="rb-end-sub"></span></div>
+
     <div id="cap" class="hidden">
       <div id="cap-label"></div>
       <div class="track"><div id="cap-fill"></div></div>
@@ -66,6 +90,7 @@
     <div id="mapbox"><canvas id="minimap"></canvas></div>
     <div id="netinfo"></div>
     <div id="help"><kbd>Z</kbd><kbd>Q</kbd><kbd>S</kbd><kbd>D</kbd> piloter <kbd>←</kbd><kbd>→</kbd> tourelle <kbd>Espace</kbd> feu <span id="help-range" class="hidden"><kbd>A</kbd><kbd>E</kbd> portée </span><kbd>Tab</kbd> scores <kbd>Alt</kbd> dégâts <kbd>T</kbd> signaler <kbd>M</kbd> carte <kbd>Entrée</kbd> chat</div>
+    <div id="help-race" class="hidden"><kbd>Z</kbd><kbd>Q</kbd><kbd>S</kbd><kbd>D</kbd> piloter <kbd>←</kbd><kbd>→</kbd> tourelle <kbd>Espace</kbd> pousser les rivaux <kbd>R</kbd> retour en piste (+3 s) <kbd>Tab</kbd> classement <kbd>M</kbd> carte <kbd>Entrée</kbd> chat</div>
     <div id="scoreboard" class="hidden"></div>
     <div id="dmglog" class="hidden"></div>
     <button id="btn-menu" class="btn ghost">Menu <kbd>Échap</kbd></button>
@@ -75,7 +100,7 @@
   <!-- ===================== Carte en grand (M) ===================== -->
   <div id="bigmap" class="hidden">
     <div class="bm-panel">
-      <div class="bm-head"><span>Carte du terrain</span><small><b>Clic</b> signaler un point · <b>clic sur un ennemi</b> le cibler · <kbd>M</kbd> fermer</small></div>
+      <div class="bm-head"><span>Carte du terrain</span><small><b>Clic</b> signaler un point · <b>clic sur un ennemi</b> le cibler · <kbd>M</kbd> fermer</small><button type="button" id="bm-close" class="bm-close" aria-label="Fermer la carte">✕</button></div>
       <canvas id="bigmap-canvas"></canvas>
     </div>
   </div>
@@ -110,6 +135,7 @@
       <button class="btn" id="menu-team">Changer d'équipe</button>
       <button class="btn" id="menu-spectate">Passer en spectateur</button>
       <button class="btn ghost" id="menu-lobby">Char et skin</button>
+      <button class="btn ghost fs-toggle" type="button">Plein écran</button>
       <div id="menu-host">
         <div class="menu-sep">Hôte</div>
         <button class="btn" id="menu-pause">Mettre en pause</button>
@@ -138,6 +164,7 @@
         </div>
         <button type="submit" class="cta" id="btn-login"><span>Entrer au salon</span></button>
         <p id="login-error" role="alert"></p>
+        <button type="button" class="btn ghost fs-toggle">Plein écran</button>
         <p class="login-hint">Nouveau pseudo ? Le compte est créé à la première connexion et garde ta progression sur le PC du serveur.</p>
       </form>
       <ul class="join-feats">
@@ -260,6 +287,7 @@
           <div class="mode-tiles" id="mode">
             <button type="button" data-v="skirmish"><b>Escarmouche</b><small>Joueurs contre joueurs · jusqu'à 8 contre 8</small></button>
             <button type="button" data-v="campaign"><b>Campagne</b><small>Coopération contre l'IA · 12 missions</small></button>
+            <button type="button" data-v="race"><b>Course</b><small>Chacun pour soi · tremplins, portes, boue</small></button>
           </div>
           <button type="button" class="btn ghost" id="ops-close">‹ Retour au hangar <kbd>Échap</kbd></button>
         </header>
@@ -288,6 +316,34 @@
                 <button type="button" data-v="1">1</button><button type="button" data-v="2">2</button><button type="button" data-v="3">3</button><button type="button" data-v="5">5</button>
               </div>
             </div>
+          </aside>
+        </div>
+
+        <div class="ops-body race-only">
+          <div class="map-list">
+            <div class="sub-head">Circuits</div>
+            <div class="map-grid" id="race-grid"></div>
+          </div>
+          <div class="map-hero">
+            <div class="map-art" id="race-art"><canvas id="race-preview"></canvas></div>
+            <div class="map-legend race-legend" id="race-legend">
+              <span><i class="lg-route"></i>Circuit</span><span><i class="lg-ramp"></i>Tremplin</span><span><i class="lg-pad"></i>Turbo</span>
+              <span><i class="lg-mud"></i>Boue</span><span><i class="lg-water"></i>Rivière</span><span><i class="lg-gate"></i>Porte / barre</span>
+            </div>
+          </div>
+          <aside class="ops-detail">
+            <div class="eyebrow">Circuit sélectionné</div>
+            <h3 id="race-name"></h3>
+            <div class="tags" id="race-tags"></div>
+            <p id="race-desc"></p>
+            <div class="op-obj"><span>Objectif</span><b>Franchis tous les points de passage dans l’ordre et termine les tours avant les autres. Pas de PV : un tir pousse l’adversaire, d’autant plus loin qu’il est léger.</b></div>
+            <div class="field">
+              <div class="field-head">Nombre de tours</div>
+              <div class="segmented" id="race-laps">
+                <button type="button" data-v="1">1</button><button type="button" data-v="2">2</button><button type="button" data-v="3">3</button><button type="button" data-v="5">5</button>
+              </div>
+            </div>
+            <ul class="challenges" id="race-challenges"></ul>
           </aside>
         </div>
 
@@ -427,6 +483,22 @@
         <button class="btn ghost" id="db-lobby">Retour au salon</button>
       </div>
       <p id="db-wait"></p>
+    </div>
+  </section>
+
+  <!-- ---------- résultats de la course ---------- -->
+  <section id="screen-raceend" class="screen hidden">
+    <div class="debrief report">
+      <div class="eyebrow" id="re-eyebrow">Course terminée</div>
+      <h1 class="logo small" id="re-title"></h1>
+      <div class="hazard"></div>
+      <div id="re-facts"></div>
+      <table id="re-table" class="db-table"></table>
+      <div id="db-actions">
+        <button class="btn primary" id="re-retry">Rejouer</button>
+        <button class="btn ghost" id="re-lobby">Retour au salon</button>
+      </div>
+      <p id="re-wait"></p>
     </div>
   </section>
 

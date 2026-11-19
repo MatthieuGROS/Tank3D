@@ -3,7 +3,9 @@
 import * as THREE from 'three';
 import { TEAM_INFO } from '/shared/constants.js';
 import { propBuilders } from './props.js';
-import { heightAt } from '/shared/map.js';
+import { heightAt, groundAt } from '/shared/map.js';
+import { buildRaceScenery } from './race.js';
+import { buildVoidWorld } from './neon.js';
 import { BUSH_CLEAR } from '/shared/vision.js';
 
 // Petit générateur pseudo-aléatoire déterministe : tout le monde voit le même décor.
@@ -37,6 +39,11 @@ export const THEMES = {
     sky: 0xcbd8e4, fog: [100, 300], ground: [0.58, 0.12, 0.86], slab: 0xdfe5ea, hill: 0xe8eef2, farTree: 0x2f4f3f,
     leaf: [0x2f5a40, 0x3a6a4a], rock: 0x8a9096, snowy: true, water: 0x3a5f75, mesa: 0x8a9096, road: 0xaeb4b2, hemi: [0xeaf2ff, 0x8a96a0, 1.6], sun: [0xf2f6ff, 2.0],
   },
+  // circuit au-dessus du vide : tout est dessiné dans models/neon.js ; ces valeurs règlent le ciel, la brume et la lumière
+  neon: {
+    sky: 0x120a26, fog: [220, 1000], ground: [0.65, 0.5, 0.1], slab: 0x1a2038, hill: 0x2a2a58, farTree: 0x2a2a58,
+    leaf: [0x2a2a58, 0x2a2a58], rock: 0x2a3050, water: 0x1a2a58, mesa: 0x2a3050, road: 0x1a2038, hemi: [0x9db4ff, 0x4a2a7a, 1.55], sun: [0xbfd2ff, 1.7],
+  },
   blizzard: {
     sky: 0x9fb0c0, fog: [40, 190], ground: [0.58, 0.1, 0.8], slab: 0xd2dae0, hill: 0xdce4ea, farTree: 0x2f4f3f,
     leaf: [0x2f5a40, 0x3a6a4a], rock: 0x7f868c, snowy: true, water: 0x35505f, mesa: 0x7f868c, road: 0xa3aaa9, hemi: [0xdde8f4, 0x707c88, 1.4], sun: [0xdfe8f4, 1.4],
@@ -57,6 +64,11 @@ export function createMapModel(map) {
     return m;
   };
 
+  // Circuit au-dessus du vide : ni sol, ni murs, ni décor lointain (tout le décor est dans neon.js)
+  const voidMap = !!map.race?.floor;
+  const world = [];
+  if (voidMap) buildVoidWorld({ map, theme, group, live: world });
+
   // Sol : grand plan avec des nuances par sommet
   const hills = !!map.hills;
   const groundSize = hills ? 2 * (Math.max(map.halfX, map.halfZ) + 190) : 520; // grande carte : l'horizon doit rester plein
@@ -70,9 +82,11 @@ export function createMapModel(map) {
   }
   groundGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   // carte à relief : le grand plan passe sous le maillage de l'arène (sinon les deux se disputent l'affichage)
-  add(groundGeo, new THREE.MeshLambertMaterial({ vertexColors: true }), 0, hills ? -0.08 : 0, 0, false);
+  if (!voidMap) add(groundGeo, new THREE.MeshLambertMaterial({ vertexColors: true }), 0, hills ? -0.08 : 0, 0, false);
 
-  if (hills) {
+  if (voidMap) {
+    // rien : le vide
+  } else if (hills) {
     // Relief : l'arène est un maillage fin dont la hauteur suit heightAt (les collisions et les obus lisent la même fonction)
     const r2 = rng(777); // générateur à part : ne décale pas le décor tiré avec `rand`
     const nx = Math.round((map.halfX * 2) / 2.5), nz = Math.round((map.halfZ * 2) / 2.5);
@@ -80,7 +94,7 @@ export function createMapModel(map) {
     const pos = geo.attributes.position, cols = [];
     const grass = new THREE.Color(), top = new THREE.Color(theme.hill), maxH = Math.max(...map.hills.map((o) => o.h));
     for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i), z = pos.getZ(i), h = heightAt(x, z, map);
+      const x = pos.getX(i), z = pos.getZ(i), h = groundAt(x, z, map); // relief naturel : les rampes de course ont leur propre maillage
       pos.setY(i, h);
       grass.setHSL(theme.ground[0] + r2() * 0.03, theme.ground[1] + r2() * 0.06, theme.ground[2] + r2() * 0.05);
       grass.lerp(top, Math.min(0.6, (h / maxH) * 0.6)); // le sommet est plus clair
@@ -95,12 +109,14 @@ export function createMapModel(map) {
     add(new THREE.BoxGeometry(map.halfX * 2, 0.06, map.halfZ * 2), mat(theme.slab), 0, 0.0, 0, false);
   }
 
-  // Murs d'enceinte
+  // Murs d'enceinte (invisibles au-dessus du vide : on ne les atteint pas)
   const wallMat = mat(0x8a8f93);
   const t = 1.2, h = map.wallHeight;
-  for (const s of [-1, 1]) {
-    add(new THREE.BoxGeometry(map.halfX * 2 + t * 2, h, t), wallMat, 0, h / 2, s * (map.halfZ + t / 2));
-    add(new THREE.BoxGeometry(t, h, map.halfZ * 2), wallMat, s * (map.halfX + t / 2), h / 2, 0);
+  if (!voidMap) {
+    for (const s of [-1, 1]) {
+      add(new THREE.BoxGeometry(map.halfX * 2 + t * 2, h, t), wallMat, 0, h / 2, s * (map.halfZ + t / 2));
+      add(new THREE.BoxGeometry(t, h, map.halfZ * 2), wallMat, s * (map.halfX + t / 2), h / 2, 0);
+    }
   }
 
   // Obstacles rectangulaires
@@ -174,13 +190,13 @@ export function createMapModel(map) {
 
   // Décor lointain (hors arène, purement visuel)
   const hillMat = mat(theme.hill), farTree = mat(theme.farTree);
-  for (let i = 0; i < 26; i++) {
+  for (let i = 0; i < (voidMap ? 0 : 26); i++) {
     const a = (i / 26) * Math.PI * 2 + rand() * 0.2;
     const d = Math.max(map.halfX, map.halfZ) + 70 + rand() * 90;
     const s = 18 + rand() * 30;
     add(new THREE.ConeGeometry(s, s * (0.5 + rand() * 0.4), 6), hillMat, Math.cos(a) * d, s * 0.2, Math.sin(a) * d, false);
   }
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < (voidMap ? 0 : 60); i++) {
     const a = rand() * Math.PI * 2;
     const d = Math.max(map.halfX, map.halfZ) + 25 + rand() * 60;
     const x = Math.cos(a) * d * 1.15, z = Math.sin(a) * d;
@@ -188,8 +204,16 @@ export function createMapModel(map) {
     add(new THREE.ConeGeometry(2.4, 7, 6), farTree, x, 3.5, z, false);
   }
 
+  // Course : piste, points de passage, tremplins, obstacles mobiles
+  let race = map.race ? buildRaceScenery({ map, theme, group, mat, add }) : null;
+  if (race && world.length) {
+    // ciel, planètes, monolithes… : eux aussi s'animent avec le décor de course
+    const raceUpdate = race.update;
+    race = { update(clock, time, next) { raceUpdate(clock, time, next); for (const a of world) a.update(clock, time); } };
+  }
+
   // Zone de capture (ou d'extraction / à tenir en campagne) : absente sur certaines missions
-  if (!map.zone) return { group, objects, bushes, zone: { update() {} } };
+  if (!map.zone) return { group, objects, bushes, zone: { update() {} }, race };
   const z = map.zone;
   const gz = heightAt(z.x, z.z, map); // zone posée sur le sommet (plat) d'une colline
   const neutral = new THREE.Color(0xf2f2f2);
@@ -222,7 +246,7 @@ export function createMapModel(map) {
     },
   };
 
-  return { group, objects, bushes, zone };
+  return { group, objects, bushes, zone, race };
 }
 
 // Buissons : touffes de feuillage sans collision (shared/props.js : bush). Un char peut s'y cacher ;

@@ -24,6 +24,7 @@ const MIME = {
   '.json': 'application/json',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
+  '.webmanifest': 'application/manifest+json',
   '.ico': 'image/x-icon',
 };
 

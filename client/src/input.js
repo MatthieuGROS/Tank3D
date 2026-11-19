@@ -25,6 +25,7 @@ export class Input {
     this.aimDir = 0;
     this.aimHeld = 0;
     this.range = 0.4; // réglage de portée de l'obusier (0..1), gardé d'une manche à l'autre
+    this.touch = null; // commandes tactiles analogiques (voir touch.js)
     addEventListener('keydown', (e) => this.onKey(e, true));
     addEventListener('keyup', (e) => this.onKey(e, false));
     addEventListener('blur', () => this.down.clear());
@@ -52,13 +53,15 @@ export class Input {
     this.aimHeld = dir !== 0 && dir === this.aimDir ? this.aimHeld + 1 : 0;
     this.aimDir = dir;
     const ramp = Math.min(1, 0.2 + (0.8 * this.aimHeld) / AIM_RAMP_TICKS);
-    const rdir = (this.has('rangeUp') ? 1 : 0) - (this.has('rangeDown') ? 1 : 0);
+    // tactile : joysticks analogiques (touch = { f, t, aim, fire, range }), le clavier garde la priorité s'il est utilisé
+    const tc = this.enabled ? this.touch : null;
+    const rdir = (this.has('rangeUp') ? 1 : 0) - (this.has('rangeDown') ? 1 : 0) || (tc?.range ?? 0);
     this.range = Math.min(1, Math.max(0, this.range + rdir * RANGE_STEP));
     return {
-      f: (this.has('forward') ? 1 : 0) - (this.has('back') ? 1 : 0),
-      t: (this.has('left') ? 1 : 0) - (this.has('right') ? 1 : 0),
-      tt: dir * ramp,
-      fire: this.has('fire'),
+      f: (this.has('forward') ? 1 : 0) - (this.has('back') ? 1 : 0) || (tc?.f ?? 0),
+      t: (this.has('left') ? 1 : 0) - (this.has('right') ? 1 : 0) || (tc?.t ?? 0),
+      tt: dir * ramp || (tc?.aim ?? 0),
+      fire: this.has('fire') || !!tc?.fire,
       rg: Math.round(this.range * 1000) / 1000,
     };
   }

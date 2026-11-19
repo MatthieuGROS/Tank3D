@@ -5,31 +5,45 @@ import {
 import { rankInfo, fmtCr } from '/shared/progress.js';
 import { MAPS, pointBlocked, heightAt } from '/shared/map.js';
 import { getMission } from '/shared/campaign.js';
-import { pointHitsTank, shellHeight, autoPitch } from '/shared/tank.js';
+import { pointHitsTank, shellHeight, autoPitch, angleDiff } from '/shared/tank.js';
+import { raceColor } from '/shared/race.js';
 import { SKINS, DEFAULT_SKIN, unlockedSkins } from '/shared/skins.js';
 import { Net } from './net.js';
 import { Input } from './input.js';
+import { TouchControls } from './touch.js';
 import { Game } from './game.js';
 import { Renderer } from './renderer.js';
 import { Effects } from './effects.js';
 import { Sfx } from './audio.js';
-import { Hud } from './hud.js';
+import { Hud, fmtRaceTime } from './hud.js';
 import { Hub } from './ui/hub.js';
 import { $, el, fmtInt, signed } from './ui/kit.js';
 import { Chat } from './chat.js';
 
+let lastPushToast = 0; // course : une seule alerte « poussé par » à la fois
 const unitDef = (type) => UNIT_TYPES[type] ?? TANK_TYPES[DEFAULT_TANK];
 const ROMAN = ['I', 'II', 'III', 'IV'];
+const RACE_MAX = 8; // pilotes maximum sur la grille (RACE_RULES.maxPlayers)
 const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
 const net = new Net();
 const input = new Input();
+const touch = new TouchControls(input);
 const game = new Game();
 const sfx = new Sfx();
 const hud = new Hud();
 const renderer = new Renderer($('game'));
 const fx = new Effects(renderer.scene);
 renderer.fx = fx;
+// Course : atterrissage d'un char (vitesse d'impact en m/s) : poussière, secousse si c'est le char suivi
+renderer.onLand = (v, hard) => {
+  if (hard < 4.5) return;
+  const n = Math.min(14, Math.round(hard * 1.1));
+  for (let i = 0; i < n; i++) fx.dust(v.x + (Math.random() - 0.5) * 4, v.z + (Math.random() - 0.5) * 4, 1.4 + hard * 0.08);
+  fx.shockRing(v.x, v.z, 2 + hard * 0.25, 0xcdbf9a);
+  if (v.id === camId) renderer.shake = Math.max(renderer.shake, Math.min(1.1, hard * 0.07));
+  sfx.explosion(volumeAt(v.x, v.z) * Math.min(0.5, hard * 0.04));
+};
 const chat = new Chat((text) => net.send({ type: 'chat', text }));
 
 let lanUrls = [];
@@ -52,6 +66,8 @@ const spec = { free: false, id: null, x: 0, y: 30, z: 0, yaw: 0, pitch: -0.4 };
 const keys = new Set(); // touches enfoncées (event.code), pour la caméra libre
 
 const isCampaign = () => game.settings.mode === 'campaign';
+const isRace = () => game.settings.mode === 'race';
+const RACE_TEAM = 'red'; // en course tout le monde est dans la même équipe (voir server/Room.js)
 
 function applyMap() {
   renderer.setMap(game.baseMap);
@@ -106,7 +122,7 @@ applyMap();
 
 const screens = {
   join: $('screen-join'), lobby: $('screen-lobby'), lost: $('screen-lost'), hud: $('hud'), debrief: $('screen-debrief'),
-  pick: $('screen-pick'), menu: $('screen-menu'), report: $('screen-report'),
+  pick: $('screen-pick'), menu: $('screen-menu'), report: $('screen-report'), raceend: $('screen-raceend'),
 };
 const myCleared = () => game.account?.cleared ?? {};
 
@@ -218,57 +234,60 @@ const isSpectator = () => !!game.me && (!game.me.team || !inRoundNow());
 // leur équipe pour la PROCHAINE partie, et regardent celle-ci en spectateurs.
 const inMatch = () => game.phase !== 'lobby' && !!game.me?.im;
 const canJoinTeam = () => !!game.me && !inMatch();
-const nextGame = () => (isCampaign() ? 'prochaine mission' : 'prochaine partie');
-const teamName = (team) => (isCampaign() ? 'l’escouade' : `les ${TEAM_INFO[team].label}`);
+const nextGame = () => (isCampaign() ? 'prochaine mission' : isRace() ? 'prochaine course' : 'prochaine partie');
+const teamName = (team) => (isCampaign() ? 'l’escouade' : isRace() ? 'la grille' : `les ${TEAM_INFO[team].label}`);
+const activity = () => (isCampaign() ? 'mission' : isRace() ? 'course' : 'partie');
 
 // Change d'équipe (null = spectateur). Un joueur de la partie en cours peut seulement en sortir (spectateur).
 function chooseTeam(team) {
   const me = game.me;
   if (!me || team === me.team) return true;
   if (team && !canJoinTeam()) return false;
-  if (inMatch() && !team && !confirm(`Tu quittes la ${isCampaign() ? 'mission' : 'partie'} en cours${aliveNow() ? ' (ton char disparaît)' : ''} et tu la regarderas en spectateur jusqu’à la fin. Continuer ?`)) return false;
+  if (inMatch() && !team && !confirm(`Tu quittes la ${activity()} en cours${aliveNow() ? ' (ton char disparaît)' : ''} et tu la regarderas en spectateur jusqu’à la fin. Continuer ?`)) return false;
   net.send({ type: 'team', team });
   return true;
 }
 
 // Panneau « partie en cours » : on regarde en spectateur ; on peut déjà choisir son équipe pour la partie suivante.
 function renderPick() {
-  const me = game.me, campaign = isCampaign();
-  $('pick-title').textContent = me.team ? `Équipe pour la ${nextGame()}` : 'Partie en cours';
-  $('pick-text').textContent = `${campaign ? 'Une mission' : 'Une partie'} est en cours entre les joueurs déjà engagés : tu la regardes en spectateur. `
-    + (me.team ? `Tu joueras avec ${teamName(me.team)} à la ${nextGame()} (tu peux encore changer).` : `Choisis dès maintenant ton équipe pour la ${nextGame()}, ou reste simplement spectateur.`);
-  $('pick-eyebrow').textContent = campaign ? 'Mission en cours' : `Partie en cours · manche ${game.round}`;
-  document.querySelector('.pick-teams').classList.toggle('solo', campaign);
+  const me = game.me, campaign = isCampaign(), race = isRace(), solo = campaign || race;
+  const soloTeam = campaign ? 'blue' : RACE_TEAM;
+  $('pick-title').textContent = me.team ? (race ? `Départ de la ${nextGame()}` : `Équipe pour la ${nextGame()}`) : `${campaign ? 'Mission' : race ? 'Course' : 'Partie'} en cours`;
+  $('pick-text').textContent = `${campaign ? 'Une mission' : race ? 'Une course' : 'Une partie'} est en cours entre les joueurs déjà engagés : tu la regardes en spectateur. `
+    + (me.team ? `Tu joueras avec ${teamName(me.team)} à la ${nextGame()} (tu peux encore changer).` : `Choisis dès maintenant ${race ? 'ta place sur la grille' : 'ton équipe'} pour la ${nextGame()}, ou reste simplement spectateur.`);
+  $('pick-eyebrow').textContent = campaign ? 'Mission en cours' : race ? 'Course en cours' : `Partie en cours · manche ${game.round}`;
+  document.querySelector('.pick-teams').classList.toggle('solo', solo);
   for (const b of document.querySelectorAll('.pick-team')) {
     const team = b.dataset.team;
     const n = [...game.roster.values()].filter((p) => p.team === team && !p.unit).length;
-    b.classList.toggle('hidden', campaign && team === 'red');
-    b.replaceChildren(campaign ? 'Rejoindre l’escouade' : TEAM_INFO[team].label, el('small', '', me.team === team ? 'ton équipe' : `${n} / ${RULES.maxPlayersPerTeam}`));
-    b.disabled = !canJoinTeam() || me.team === team || n >= RULES.maxPlayersPerTeam;
+    const max = race ? RACE_MAX : RULES.maxPlayersPerTeam;
+    b.classList.toggle('hidden', solo && team !== soloTeam);
+    b.replaceChildren(campaign ? 'Rejoindre l’escouade' : race ? 'Prendre le départ' : TEAM_INFO[team].label, el('small', '', me.team === team ? (race ? 'tu es sur la grille' : 'ton équipe') : `${n} / ${max}`));
+    b.disabled = !canJoinTeam() || me.team === team || n >= max;
   }
   $('pick-spectate').textContent = me.team ? 'Annuler mon équipe' : 'Rester spectateur';
 }
 
 // Menu en jeu : reprendre, équipe, spectateur ; pour l'hôte : pause, fin de partie, exclusion.
 function renderMenu(isHost) {
-  const me = game.me, campaign = isCampaign();
+  const me = game.me, campaign = isCampaign(), race = isRace();
   const live = ['countdown', 'playing', 'roundEnd'].includes(game.phase);
   $('menu-eyebrow').textContent = game.paused ? 'Menu · partie en pause' : 'Menu';
-  $('menu-title').textContent = inMatch() ? (campaign ? 'Escouade' : TEAM_INFO[me.team].label) : 'Spectateur';
-  $('menu-team').textContent = me.team ? `Équipe pour la ${nextGame()}` : campaign ? 'Rejoindre l’escouade (prochaine mission)' : 'Choisir une équipe (prochaine partie)';
+  $('menu-title').textContent = inMatch() ? (campaign ? 'Escouade' : race ? 'Pilote' : TEAM_INFO[me.team].label) : 'Spectateur';
+  $('menu-team').textContent = me.team ? (race ? `Place pour la ${nextGame()}` : `Équipe pour la ${nextGame()}`) : campaign ? 'Rejoindre l’escouade (prochaine mission)' : race ? 'Prendre le départ (prochaine course)' : 'Choisir une équipe (prochaine partie)';
   $('menu-team').classList.toggle('hidden', !canJoinTeam());
   $('menu-spectate').classList.toggle('hidden', !me.team);
-  $('menu-spectate').textContent = inMatch() ? 'Quitter la partie (spectateur)' : 'Annuler mon équipe';
+  $('menu-spectate').textContent = inMatch() ? `Quitter la ${activity()} (spectateur)` : 'Annuler mon équipe';
   $('menu-host').classList.toggle('hidden', !isHost);
   if (!isHost) return;
   $('menu-pause').textContent = game.paused ? 'Reprendre la partie' : 'Mettre en pause';
   $('menu-pause').disabled = !live;
-  $('menu-abort').textContent = campaign ? 'Abandonner la mission' : 'Terminer la partie';
+  $('menu-abort').textContent = campaign ? 'Abandonner la mission' : race ? 'Abandonner la course' : 'Terminer la partie';
   const rows = [...game.roster.values()].filter((p) => !p.unit && p.id !== game.myId).map((p) => {
     const li = el('li');
     li.append(el('span', 'nm', p.name));
     if (p.bot) li.append(el('span', 'tg', 'bot'));
-    li.append(p.team ? el('span', `tg ${p.team}`, campaign ? 'escouade' : TEAM_INFO[p.team].label) : el('span', 'tg', 'spectateur'));
+    li.append(p.team ? el('span', `tg ${p.team}`, campaign ? 'escouade' : race ? 'pilote' : TEAM_INFO[p.team].label) : el('span', 'tg', 'spectateur'));
     li.append(kickButton(p));
     return li;
   });
@@ -328,6 +347,57 @@ function renderDebrief(isHost) {
   $('db-wait').textContent = isHost ? (d.success && !d.next ? 'Campagne terminée. Bravo, commandant !' : '') : `En attente de ${hostName}…`;
 }
 
+// Résultats de la course : classement, temps, meilleur tour.
+function renderRaceEnd(isHost) {
+  const d = game.debrief;
+  if (!d?.race) return;
+  const mine = d.results.find((r) => r.id === game.myId);
+  $('re-eyebrow').textContent = `Course terminée · ${d.name} · ${d.laps} tour${d.laps > 1 ? 's' : ''}`;
+  const title = $('re-title');
+  title.textContent = mine ? (mine.time ? (mine.rank === 1 ? 'Victoire !' : `${mine.rank}${mine.rank === 1 ? 'er' : 'e'} place`) : 'Hors course') : `Victoire de ${d.results[0]?.name ?? '?'}`;
+  title.classList.toggle('fail', !!mine && !mine.time);
+  const fact = (label, value, ok) => {
+    const f = el('div', ok ? 'ok' : '', label);
+    f.append(el('b', '', value));
+    return f;
+  };
+  $('re-facts').replaceChildren(
+    fact('Position', mine ? `${mine.rank} / ${d.results.length}` : '—', mine?.rank === 1),
+    fact('Temps', mine?.time ? fmtRaceTime(mine.time) : 'Non classé'),
+    fact('Meilleur tour', mine?.best ? fmtRaceTime(mine.best) : '—'),
+  );
+  const table = $('re-table');
+  table.innerHTML = '<tr><th>#</th><th>Pilote</th><th>Char</th><th class="n">Temps</th><th class="n">Meilleur tour</th><th class="n">Poussées</th></tr>';
+  const index = racerIndexes();
+  for (const r of d.results) {
+    const tr = table.insertRow();
+    if (r.id === game.myId) tr.className = 'me';
+    tr.insertCell().textContent = r.rank;
+    const name = tr.insertCell();
+    name.textContent = r.name;
+    name.style.color = raceColor(index.get(r.id) ?? 0)[1];
+    if (r.bot) name.append(el('small', '', 'bot'));
+    const tank = tr.insertCell();
+    tank.textContent = TANK_TYPES[r.type]?.name ?? '';
+    tank.className = 'dim';
+    const time = r.time ? fmtRaceTime(r.time) + (r.pen ? ` (+${r.pen / TICK_RATE} s)` : '') : `${r.laps} / ${d.laps} tours`;
+    for (const v of [time, r.best ? fmtRaceTime(r.best) : '—', r.pushes]) {
+      const td = tr.insertCell();
+      td.textContent = v;
+      td.className = 'n';
+    }
+  }
+  $('re-retry').classList.toggle('hidden', !isHost);
+  $('re-lobby').classList.toggle('hidden', !isHost);
+  $('re-wait').textContent = isHost ? '' : `En attente de ${game.roster.get(game.hostId)?.name ?? '?'}…`;
+}
+
+// Place de chaque pilote sur la grille (par identifiant) : donne sa couleur d'identification.
+function racerIndexes() {
+  const ids = [...game.roster.values()].filter((p) => p.team && !p.unit).map((p) => p.id).sort((a, b) => a - b);
+  return new Map(ids.map((id, i) => [id, i]));
+}
+
 // Rapport de bataille à afficher ? (au retour au salon, pour les joueurs de la partie, jusqu'à ce qu'ils le referment)
 const reportShown = () => game.phase === 'lobby' && !!game.report && game.report.id !== reportSeen && game.report.players.some((p) => p.id === game.myId);
 
@@ -338,13 +408,15 @@ function refreshUI() {
   // en cours de partie, tout le monde voit le jeu (les sans-équipe en spectateurs) ; le salon se rouvre à la demande
   const inLobby = !!me && (game.phase === 'lobby' || lobbyOpen);
   const inGame = !!me && !inLobby;
+  const race = isRace();
   const debrief = inGame && game.phase === 'debrief' && performance.now() >= debriefAt;
   if (debrief) menuOpen = pickOpen = false;
   const report = inLobby && reportShown();
   screens.join.classList.toggle('hidden', !!me || lost);
   screens.lobby.classList.toggle('hidden', !inLobby || lost);
   screens.hud.classList.toggle('hidden', !inGame || debrief || lost);
-  screens.debrief.classList.toggle('hidden', !debrief || lost);
+  screens.debrief.classList.toggle('hidden', !debrief || race || lost);
+  screens.raceend.classList.toggle('hidden', !debrief || !race || lost);
   screens.pick.classList.toggle('hidden', !inGame || !pickOpen || lost);
   screens.report.classList.toggle('hidden', !report || lost);
   screens.menu.classList.toggle('hidden', !inGame || !menuOpen || pickOpen || lost);
@@ -355,7 +427,8 @@ function refreshUI() {
   }
   screens.lost.classList.toggle('hidden', !lost);
   document.body.classList.toggle('mode-campaign', campaign);
-  document.body.classList.toggle('mode-skirmish', !campaign);
+  document.body.classList.toggle('mode-race', race);
+  document.body.classList.toggle('mode-skirmish', !campaign && !race);
   document.body.classList.toggle('in-hub', inLobby && !lost);
   hudActive = inGame && !debrief && !lost;
   input.enabled = hudActive && !menuOpen && !pickOpen && !game.paused;
@@ -364,11 +437,12 @@ function refreshUI() {
   if (!hudActive || menuOpen || pickOpen) setBigMap(false);
   applyMap();
   hud.setCampaignMode(campaign);
+  hud.setRaceMode(race);
   if (!me) return;
   if (!inLobby) hub.reset();
 
   const isHost = game.hostId === game.myId;
-  if (debrief) renderDebrief(isHost);
+  if (debrief) (race ? renderRaceEnd : renderDebrief)(isHost);
   if (report) renderReport();
   if (pickOpen) renderPick();
   if (menuOpen) renderMenu(isHost);
@@ -438,6 +512,12 @@ $('menu-resume').addEventListener('click', () => {
   menuOpen = false;
   refreshUI();
 });
+// toucher à côté du panneau referme le menu (pas de touche Échap sur mobile)
+$('screen-menu').addEventListener('click', (e) => {
+  if (e.target !== e.currentTarget) return;
+  menuOpen = false;
+  refreshUI();
+});
 $('menu-team').addEventListener('click', () => {
   menuOpen = false;
   pickOpen = true;
@@ -455,7 +535,7 @@ $('menu-lobby').addEventListener('click', () => {
 });
 $('menu-pause').addEventListener('click', () => net.send({ type: 'pause', on: !game.paused }));
 $('menu-abort').addEventListener('click', () => {
-  if (!confirm(isCampaign() ? 'Abandonner la mission et revenir au salon ?' : 'Terminer la partie et revenir au salon ?')) return;
+  if (!confirm(isCampaign() ? 'Abandonner la mission et revenir au salon ?' : isRace() ? 'Abandonner la course et revenir au salon ?' : 'Terminer la partie et revenir au salon ?')) return;
   menuOpen = false;
   net.send({ type: 'abort' });
 });
@@ -463,6 +543,8 @@ $('menu-logout').addEventListener('click', () => location.reload());
 $('db-next').addEventListener('click', () => net.send({ type: 'debrief', action: 'next' }));
 $('db-retry').addEventListener('click', () => net.send({ type: 'debrief', action: 'retry' }));
 $('db-lobby').addEventListener('click', () => net.send({ type: 'debrief', action: 'lobby' }));
+$('re-retry').addEventListener('click', () => net.send({ type: 'debrief', action: 'retry' }));
+$('re-lobby').addEventListener('click', () => net.send({ type: 'debrief', action: 'lobby' }));
 addEventListener('pointerdown', () => sfx.unlock());
 addEventListener('keydown', () => sfx.unlock());
 
@@ -586,7 +668,7 @@ function onEvent(ev) {
     }
     case 'boom': {
       fx.removeShell(ev.id);
-      const scale = ev.r === 0 ? 0.3 : Math.min(2, (ev.r ?? RULES.splashRadius) / RULES.splashRadius);
+      const scale = ev.r === 0 ? 0.3 : isRace() ? 0.4 : Math.min(2, (ev.r ?? RULES.splashRadius) / RULES.splashRadius); // course : pas de dégâts, explosion discrète
       fx.explosion(ev.x, ev.y, ev.z, scale);
       if (ev.hit !== null) {
         fx.sparks(ev.x, ev.y, ev.z, ev.r === 0 ? 3 : 14, ev.r === 0 ? 0.5 : 1.2); // impact sur du blindage
@@ -678,6 +760,75 @@ function onEvent(ev) {
       if (shotByWatched(ev.by)) damageNumber(ev.x, Math.min(ev.h, 4) + 1.5, ev.z, 'Détruit', 'obj kill');
       break;
     }
+    case 'raceStart':
+      fx.clear();
+      marks.length = 0;
+      hud.clearDamageLog();
+      debriefAt = 0;
+      hud.announce('Course', `${ev.laps} tour${ev.laps > 1 ? 's' : ''} · franchis tous les points de passage`, 2.6);
+      break;
+    case 'cp':
+      if (ev.id === game.myId) {
+        hud.toast(`Point de passage ${ev.n} / ${ev.of - 1}`, 'green');
+        sfx.pickup();
+      }
+      break;
+    case 'lap': {
+      if (ev.id === game.myId) {
+        hud.announce(`Tour ${ev.lap} / ${game.settings.laps}`, `Tour précédent : ${fmtRaceTime(ev.time)}`, 2.4);
+        sfx.beep(true);
+      } else if (ev.lap === game.settings.laps) {
+        hud.toast(`${game.roster.get(ev.id)?.name ?? '?'} attaque son dernier tour`, 'amber');
+      }
+      break;
+    }
+    case 'fin': {
+      const name = game.roster.get(ev.id)?.name ?? '?';
+      if (ev.id === game.myId) {
+        hud.announce(`${ev.rank}${ev.rank === 1 ? 'er' : 'e'}`, `Arrivée en ${fmtRaceTime(ev.time)}`, 4);
+        sfx.victory();
+      } else {
+        hud.toast(`${name} franchit la ligne · ${ev.rank}${ev.rank === 1 ? 'er' : 'e'}`, 'amber');
+      }
+      break;
+    }
+    case 'rspawn': {
+      const v = views.get(ev.id);
+      if (v && ev.why !== 'void') fx.burst(v.x, v.z, ev.why === 'water' ? 0x4fb4ff : 0xc0c0c0, 1.6); // gerbe à l'endroit de la chute
+      fx.burst(ev.x, ev.z, ev.why === 'void' ? 0xff4fd0 : 0x6cc2ff, 0.9);
+      if (ev.id === game.myId) {
+        hud.toast(ev.why === 'water' ? 'À l’eau ! Retour au dernier point de passage (+3 s)' : ev.why === 'void' ? 'Dans le vide ! Retour au dernier point de passage (+3 s)' : 'Retour au dernier point de passage (+3 s)', 'red');
+        sfx.beep(false);
+      }
+      break;
+    }
+    case 'push': {
+      // un tir ne blesse pas : il pousse. v = vitesse de poussée (m/s), la distance parcourue vaut environ v / 2,3
+      const v = views.get(ev.id);
+      const dist = Math.round(ev.v / 2.3);
+      renderer.hitKick(ev.id);
+      if (v) {
+        fx.sparks(v.x, v.gy + 1.4, v.z, 8, 1.1);
+        fx.shockRing(v.x, v.z, 2.5 + ev.v * 0.08, v.color ?? 0xcdbf9a);
+      }
+      if (ev.id === game.myId) {
+        hud.damageFlash();
+        renderer.shake = Math.max(renderer.shake, Math.min(1.4, 0.4 + ev.v * 0.035));
+        if (performance.now() - lastPushToast > 1800) {
+          lastPushToast = performance.now();
+          hud.toast(`Poussé par ${game.roster.get(ev.by)?.name ?? 'un rival'}`, 'red');
+        }
+      } else if (shotByWatched(ev.by)) {
+        hud.hitMarker();
+        sfx.hit();
+        if (v) damageNumber(v.x, v.gy + unitDef(v.type).height + 1.6, v.z, `+${dist} m`, 'kill');
+      }
+      break;
+    }
+    case 'raceEnd':
+      debriefAt = performance.now() + 1200;
+      setTimeout(refreshUI, 1300);
+      break;
     case 'pause':
       hud.toast(ev.on ? 'Partie en pause' : 'Reprise de la partie', ev.on ? '' : 'green');
       sfx.beep(!ev.on);
@@ -808,7 +959,8 @@ addEventListener('keydown', (e) => {
   }
   if (menuOpen || pickOpen) return;
   if (k === 'm') setBigMap(!bigMapOpen);
-  else if (k === 't') pingAhead();
+  else if (k === 'r' && isRace() && game.phase === 'playing' && aliveNow()) net.send({ type: 'respawn' });
+  else if (k === 't' && !isRace()) pingAhead();
 });
 
 // Fait vieillir les signalements ; une cible disparaît avec l'ennemi.
@@ -843,10 +995,10 @@ function onLocalFire() {
 // Altitude du canon et pente de l'obus (visée verticale automatique sur les cartes à relief ; vy absent sinon).
 function shotProfile(p, def) {
   const map = game.map;
-  if (!map.hills) return { y0: def.muzzleHeight, vy: undefined, g: 0 };
-  const g = heightAt(p.x, p.z, map), y0 = def.muzzleHeight + g;
+  if (!map.hills && !map.race?.floor) return { y0: def.muzzleHeight, vy: undefined, g: 0 }; // circuit au-dessus du vide : relief aussi
+  const g = map.race ? p.y : heightAt(p.x, p.z, map), y0 = def.muzzleHeight + g; // course : altitude réelle du char (tremplins, vol)
   const foes = [];
-  for (const v of views.values()) if (v.alive && !v.hidden && v.team !== game.me?.team && v.id !== game.myId) foes.push(v);
+  for (const v of views.values()) if (v.alive && !v.hidden && (isRace() || v.team !== game.me?.team) && v.id !== game.myId) foes.push(v);
   return { y0, vy: autoPitch(p.x, p.z, p.ty, y0, foes, map, def.shellSpeed), g };
 }
 
@@ -1018,12 +1170,18 @@ function frame(now) {
   views = new Map();
   if (game.latest && game.phase !== 'lobby') {
     const rt = game.renderTick(now);
+    const raceMap = !!game.map.race, ri = raceMap ? racerIndexes() : null;
     for (const [id, p] of game.latest.pl) {
       const v = id === game.myId && game.pred ? game.ownView(acc / DT) : game.remoteView(id, rt);
       if (!v) continue;
       const r = game.roster.get(id);
       v.id = id;
-      v.gy = heightAt(v.x, v.z, game.map);
+      v.gy = raceMap && v.y !== undefined ? v.y : heightAt(v.x, v.z, game.map);
+      if (ri) {
+        const c = raceColor(ri.get(id) ?? 0);
+        v.color = c[0];
+        v.css = c[1];
+      }
       v.hp = p.hp;
       v.maxHp = p.mh;
       v.alive = p.al;
@@ -1054,7 +1212,7 @@ function frame(now) {
   const target = cameraTarget();
   renderer.bushViewer = target; // buissons à moins de 10 m de lui : transparents (pris en compte à l'image suivante)
   if (target) {
-    renderer.followCamera(target.x, target.z, target.ty, dt, camId !== target.id);
+    renderer.followCamera(target.x, target.z, target.ty, dt, camId !== target.id, target.y, Math.abs(target.speed) / unitDef(target.type).maxSpeed);
     listener = target;
   } else if (spec.free && isSpectator() && hudActive) {
     moveFreeCam(dt);
@@ -1071,6 +1229,12 @@ function frame(now) {
   // 4. Effets
   if (!game.paused) fx.update(dt); // en pause, les obus restent figés comme sur le serveur
   renderer.zone.update(game.zone.team, game.zone.p, game.zone.c, time);
+  if (game.map.race) {
+    // portes, barres, tapis : l'horloge de course vient du serveur ; au salon le circuit vit tout seul
+    const watched = game.race?.pl.find((r) => r[0] === (camId ?? game.myId));
+    const nextCp = watched && !watched[3] && game.phase !== 'lobby' ? watched[2] : -1;
+    renderer.updateRace(game.phase === 'lobby' || !game.race ? time * 60 : game.raceClock(now, net.rtt / 2), time, nextCp);
+  }
   const mine = views.get(game.myId);
   sfx.engine(!!mine?.alive && input.enabled, mine ? Math.abs(mine.speed) / game.def.maxSpeed : 0);
 
@@ -1094,7 +1258,7 @@ function impactDistance(mine, def, shot) {
 
 function updateHud(dt, mine, target) {
   const def = game.def;
-  const campaign = isCampaign();
+  const campaign = isCampaign(), race = isRace();
   hud.update(dt);
   hud.setTimer(game.timeLeft, game.phase);
   hud.setZone(campaign ? { ...game.zone, p: 0, c: false } : game.zone);
@@ -1105,12 +1269,12 @@ function updateHud(dt, mine, target) {
     const n = Math.ceil(game.timeLeft / TICK_RATE);
     if (n > 0 && n !== lastCount) {
       lastCount = n;
-      hud.announce(String(n), campaign ? mission.name : `Manche ${game.round}`, 1.2);
+      hud.announce(String(n), campaign ? mission.name : race ? `Course · ${game.settings.laps} tour${game.settings.laps > 1 ? 's' : ''}` : `Manche ${game.round}`, 1.2);
       sfx.beep(false);
     }
   } else if (lastPhase === 'countdown' && game.phase === 'playing') {
     lastCount = null;
-    hud.announce(campaign ? 'En avant !' : 'Feu à volonté', campaign ? mission.objective.label : '', 1.6);
+    hud.announce(campaign ? 'En avant !' : race ? 'Partez !' : 'Feu à volonté', campaign ? mission.objective.label : race ? 'Pied au plancher' : '', 1.6);
     sfx.beep(true);
   }
   lastPhase = game.phase;
@@ -1121,6 +1285,12 @@ function updateHud(dt, mine, target) {
   const myTeam = game.me?.team;
   const spectator = isSpectator();
   document.body.classList.toggle('spectating', spectator);
+  touch.update({
+    watching: !views.get(game.myId)?.alive,
+    freeCam: spec.free && specControls(),
+    mortar: game.def.weapon === 'mortar',
+    race,
+  });
   let boss = null;
   updateMarks(dt);
   const targeted = new Set(marks.filter((m) => m.target != null).map((m) => m.target));
@@ -1139,7 +1309,7 @@ function updateHud(dt, mine, target) {
       dots.push({
         id: v.id, name: v.unit ? '' : game.roster.get(v.id)?.name, enemy: !ally && !spectator,
         x: v.x, z: v.z, ty: v.ty, team: v.team, me: v.id === game.myId, alive: v.alive,
-        fixed: udef.static, obj: v.obj, size: udef.boss ? 4.5 : udef.structure ? 3 : udef.static ? 1.8 : undefined,
+        fixed: udef.static, obj: v.obj, size: udef.boss ? 4.5 : udef.structure ? 3 : udef.static ? 1.8 : undefined, css: v.css,
       });
     }
     if (v.alive && visible && !ally && !spectator) {
@@ -1153,7 +1323,7 @@ function updateHud(dt, mine, target) {
     if (v.unit && !v.obj && !marked && dist > 55 && v.hp >= v.maxHp) continue;
     const s = renderer.project(v.x, v.gy + udef.height + 1.4, v.z);
     const name = v.unit ? udef.name : game.roster.get(v.id)?.name ?? '';
-    if (s.front) tags.push({ id: v.id, name, team: v.team, obj: v.obj, marked, hpRatio: v.hp / (v.maxHp || udef.maxHp), x: s.x, y: s.y });
+    if (s.front) tags.push({ id: v.id, name, team: v.team, obj: v.obj, marked, css: v.css, hpRatio: v.hp / (v.maxHp || udef.maxHp), x: s.x, y: s.y });
   }
   // signalements de points dans le monde (les cibles, elles, s'affichent à côté de la barre de vie)
   const from = listener;
@@ -1166,7 +1336,7 @@ function updateHud(dt, mine, target) {
   }
   hud.setMarks(markTags);
   shownDots = dots;
-  if (!campaign) hud.setAlive(counts);
+  if (!campaign && !race) hud.setAlive(counts);
   hud.setTags(tags);
   hud.drawMinimap(dots, game.zone, game.pickups, marks);
   if (campaign) {
@@ -1253,10 +1423,68 @@ function updateHud(dt, mine, target) {
     hud.setSpectate(text, hint);
   }
 
-  hud.setSpotted(!!mine?.alive && !spectator && mine.spotted && !campaign);
-  hud.setScoreboard(input.has('scores'), game.roster);
+  hud.setSpotted(!!mine?.alive && !spectator && mine.spotted && !campaign && !race);
+  if (race) updateRaceHud(dt, mine, target);
+  else hud.setScoreboard(input.has('scores'), game.roster);
   hud.setDamageLog(input.has('dmglog'));
   hud.setNetInfo(`ping ${Math.round(net.rtt)} ms · tampon ${Math.round(game.interpDelay)} ms`);
+}
+
+// ------------------------------------------------------------ HUD de course
+
+// Classement en direct : une ligne par pilote, dans l'ordre (arrivés d'abord, puis par progression).
+function raceRows() {
+  const rc = game.race;
+  if (!rc) return [];
+  const index = racerIndexes();
+  return rc.pl.map(([id, lap, cp, fin, pen]) => {
+    const p = game.roster.get(id);
+    return { id, name: p?.name ?? '?', css: raceColor(index.get(id) ?? 0)[1], lap, cp, fin, pen, me: id === game.myId, bot: !!p?.bot };
+  });
+}
+
+let wrongWay = 0; // temps passé à rouler à contresens (s) : l'alerte n'apparaît qu'après un moment
+function updateRaceHud(dt, mine, target) {
+  const rc = game.race, track = game.map.race?.track;
+  if (!rc || !track) return;
+  const race = game.map.race, n = race.cps.length;
+  const rows = raceRows();
+  const focus = rows.find((r) => r.id === (target?.id ?? game.myId)) ?? rows.find((r) => r.me);
+  const tv = target ?? mine; // le char dont on suit la course (le mien, ou celui observé)
+  const speed = tv ? Math.abs(tv.speed) : 0;
+  const f = focus ?? { lap: 1, cp: 1, fin: 0 };
+  const clock = game.raceClock(performance.now(), net.rtt / 2);
+  hud.setRace({
+    pos: Math.max(1, rows.indexOf(focus) + 1), total: rows.length, lap: f.lap, laps: rc.lp,
+    cp: f.cp === 0 ? n - 1 : f.cp - 1, cpTotal: n - 1,
+    time: f.fin ? f.fin : game.phase === 'countdown' ? 0 : clock,
+    rows, speed: speed * 3.6, ratio: speed / 24, boost: !!tv?.boost, air: !!tv?.air,
+    done: f.fin ? { rank: rows.indexOf(focus) + 1, time: f.fin } : null, grace: rc.g,
+  });
+
+  // repère du prochain point de passage (collé au bord de l'écran quand il est hors champ) et alerte de contresens
+  let marker = null, wrong = false;
+  if (tv && focus && !f.fin && game.phase !== 'debrief') {
+    const c = race.cps[f.cp];
+    const p = renderer.project(c.x, heightAt(c.x, c.z, game.map) + 6.8, c.z);
+    const cx = innerWidth / 2, cy = innerHeight / 2, mx = 60, my = 100;
+    const out = !p.front || p.x < mx || p.x > innerWidth - mx || p.y < my || p.y > innerHeight - my;
+    let x = p.x, y = p.y;
+    if (out) {
+      let dx = p.x - cx, dy = p.y - cy;
+      if (!p.front) { dx = -dx; dy = -dy; }
+      const k = Math.min((cx - mx) / Math.max(Math.abs(dx), 1e-6), (cy - my) / Math.max(Math.abs(dy), 1e-6));
+      x = cx + dx * k;
+      y = cy + dy * k;
+    }
+    marker = { x, y, edge: out, dist: Math.hypot(c.x - tv.x, c.z - tv.z) };
+    const a = track.at(track.nearest(tv.x, tv.z).s);
+    wrong = speed > 3 && Math.sin(tv.yaw) * a.fx + Math.cos(tv.yaw) * a.fz < -0.35 && game.phase === 'playing';
+  }
+  wrongWay = Math.max(0, Math.min(2, wrongWay + (wrong ? dt : -dt * 2)));
+  hud.setCheckpointMarker(marker);
+  hud.setWrongWay(wrongWay > 0.8);
+  hud.setRaceScoreboard(input.has('scores'), rows, rc.lp);
 }
 
 refreshUI();

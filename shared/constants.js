@@ -21,6 +21,7 @@ export const TANK_TYPES = {
     role: 'Char moyen polyvalent',
     desc: 'Équilibré en tout : bon blindage, canon fiable, mobilité correcte.',
     maxHp: 1100,
+    weight: 30, // tonnes : en course, plus un char est léger plus les tirs le poussent loin (shared/race.js)
     radius: 2.0, // rayon de collision au sol
     maxSpeed: 44 / 3.6, // m/s (44 km/h)
     reverseSpeed: 6,
@@ -48,6 +49,7 @@ export const TANK_TYPES = {
     role: "Char lourd d'assaut",
     desc: 'Blindage massif et canon dévastateur, mais lent à manœuvrer et à recharger.',
     maxHp: 1700,
+    weight: 55, // tonnes : en course, plus un char est léger plus les tirs le poussent loin (shared/race.js)
     radius: 2.3,
     maxSpeed: 7,
     reverseSpeed: 4,
@@ -74,6 +76,7 @@ export const TANK_TYPES = {
     role: 'Char léger de reconnaissance',
     desc: 'Rapide et nerveux, tir rapide mais peu puissant. Ne supporte pas les coups.',
     maxHp: 650,
+    weight: 14, // tonnes : en course, plus un char est léger plus les tirs le poussent loin (shared/race.js)
     radius: 1.6,
     maxSpeed: 15 + 7 / 3.6, // 61 km/h
     reverseSpeed: 8,
@@ -104,6 +107,7 @@ export const TANK_TYPES = {
     trait: 'Rafales de 3 obus',
     price: 100000,
     maxHp: 850,
+    weight: 18, // tonnes : en course, plus un char est léger plus les tirs le poussent loin (shared/race.js)
     radius: 1.75,
     maxSpeed: 55 / 3.6,
     reverseSpeed: 7,
@@ -136,6 +140,7 @@ export const TANK_TYPES = {
     trait: 'Canon en casemate (±12°)',
     price: 200000,
     maxHp: 1200,
+    weight: 34, // tonnes : en course, plus un char est léger plus les tirs le poussent loin (shared/race.js)
     radius: 2.1,
     maxSpeed: 40 / 3.6,
     reverseSpeed: 6.5,
@@ -166,6 +171,7 @@ export const TANK_TYPES = {
     price: 300000,
     weapon: 'mortar',
     maxHp: 950,
+    weight: 28, // tonnes : en course, plus un char est léger plus les tirs le poussent loin (shared/race.js)
     radius: 2.0,
     maxSpeed: 36 / 3.6,
     reverseSpeed: 6,
@@ -273,6 +279,8 @@ export function tankStats(def) {
     ...acc,
     ['Vitesse', def.maxSpeed / 18, `${fr(def.maxSpeed * 3.6)} km/h`],
     ['Maniabilité', def.turnRate / 2.8, `${fr((def.turnRate * 180) / Math.PI)}°/s`],
+    // course : un char léger est poussé plus loin par chaque tir (shared/race.js)
+    ...(def.weight ? [['Poids', def.weight / 60, `${def.weight} t`]] : []),
   ];
 }
 const clampUnit = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);

@@ -28,12 +28,16 @@ export class Game {
     this.timeLeft = 0;
     this.round = 0;
     this.score = { red: 0, blue: 0 };
-    this.settings = { roundsToWin: 3, map: DEFAULT_MAP, mode: 'skirmish', mission: 'm1', difficulty: 'normal' };
+    this.settings = { roundsToWin: 3, map: DEFAULT_MAP, mode: 'skirmish', mission: 'm1', difficulty: 'normal', laps: 2, raceMap: 'colline' };
     this.unlocked = ['m1']; // missions ouvertes à l'escouade (débloquées par l'un des joueurs présents)
     this.account = null; // { name, cleared: { m1: 1..3 }, xp, allTanks } : mon compte, mes étoiles et mon expérience
     this.debrief = null;
     this.campaign = null; // objectif, escouade, temps (snapshots de campagne)
     this.pickups = [];
+    this.race = null; // course : horloge, tours et classement (snapshots)
+    this.clockBase = 0; // horloge de course au dernier snapshot…
+    this.clockAt = 0; // …et heure locale de sa réception
+    this.held = false; // course : mon char est bloqué après un retour en piste
     this.broken = new Set(); // objets du décor détruits pendant la manche
     this.zone = { team: null, p: 0, c: false };
 
@@ -96,6 +100,11 @@ export class Game {
     this.zone = msg.zone;
     this.campaign = msg.cm ?? null;
     this.pickups = msg.pk ?? [];
+    this.race = msg.rc ?? null;
+    if (msg.rc) {
+      this.clockBase = msg.rc.c;
+      this.clockAt = now;
+    }
 
     // Synchronisation d'horloge + mesure de la gigue pour régler le retard d'interpolation.
     const sample = now - msg.tick * TICK_MS;
@@ -123,8 +132,13 @@ export class Game {
 
   reconcile(me, ack) {
     while (this.pending.length && this.pending[0].seq <= ack) this.pending.shift();
-    const s = { x: me.x, z: me.z, yaw: me.yaw, speed: me.sp, ty: me.ty, reload: me.rl, rof: me.rf ?? 1, shots: me.bc ?? 0, aim: me.ad ?? 0 };
-    for (const cmd of this.pending) stepTank(s, cmd, this.def, this.map, this.others, cmd.frozen);
+    const s = {
+      x: me.x, z: me.z, yaw: me.yaw, speed: me.sp, ty: me.ty, reload: me.rl, rof: me.rf ?? 1, shots: me.bc ?? 0, aim: me.ad ?? 0,
+      // course : altitude, vol, poussée reçue, turbo
+      y: me.y ?? 0, vy: me.av ?? 0, air: me.av !== undefined, kx: me.kx ?? 0, kz: me.kz ?? 0, kw: me.kw ?? 0, boost: me.bs ?? 0,
+    };
+    this.held = !!me.hd;
+    for (const cmd of this.pending) stepTank(s, cmd, this.def, this.map, this.others, cmd.frozen, cmd.clock);
 
     const old = this.pred;
     this.pred = s;
@@ -154,12 +168,21 @@ export class Game {
   localTick(cmd, net) {
     if (!this.pred || this.paused) return false; // en pause, le serveur ne simule plus rien
     cmd.seq = ++this.seq;
-    cmd.frozen = this.phase === 'countdown';
+    cmd.frozen = this.phase === 'countdown' || this.held;
+    cmd.clock = this.map.race ? this.raceClock(performance.now(), net.rtt) : 0; // portes et barres mobiles dépendent de l'horloge
     net.send({ type: 'in', seq: cmd.seq, f: cmd.f, t: cmd.t, tt: cmd.tt, fire: cmd.fire, rg: cmd.rg });
     this.pending.push(cmd);
     if (this.pending.length > 120) this.pending.shift();
     this.prev = { ...this.pred };
-    return stepTank(this.pred, cmd, this.def, this.map, this.others, cmd.frozen);
+    return stepTank(this.pred, cmd, this.def, this.map, this.others, cmd.frozen, cmd.clock);
+  }
+
+  // Horloge de course estimée (ticks depuis le feu vert) à l'heure locale `now` ; `lead` = avance en ms
+  // (la commande envoyée est traitée par le serveur environ un trajet plus tard).
+  raceClock(now, lead = 0) {
+    if (!this.race) return 0;
+    const dt = this.paused ? 0 : Math.max(0, now - this.clockAt + lead);
+    return Math.max(0, this.clockBase + dt / TICK_MS);
   }
 
   decayError(dt) {
@@ -178,6 +201,7 @@ export class Game {
       yaw: lerpAngle(a.yaw, b.yaw, alpha) + this.err.yaw,
       ty: lerpAngle(a.ty, b.ty, alpha),
       speed: b.speed,
+      y: lerp(a.y ?? 0, b.y ?? 0, alpha), air: !!b.air, vy: b.vy ?? 0, boost: b.boost > 0,
     };
   }
 
@@ -207,6 +231,7 @@ export class Game {
         yaw: pa.yaw + angleDiff(pp.yaw, pa.yaw) * k,
         ty: pa.ty + angleDiff(pp.ty, pa.ty) * k,
         speed: pa.sp,
+        ...raceFields(pa),
       };
     }
     const pb = b.pl.get(id);
@@ -219,10 +244,17 @@ export class Game {
       yaw: lerpAngle(pa.yaw, pb.yaw, t),
       ty: lerpAngle(pa.ty, pb.ty, t),
       speed: pb.sp,
+      ...raceFields(pb, pa, t),
     };
   }
 }
 
 function view(p) {
-  return { x: p.x, z: p.z, yaw: p.yaw, ty: p.ty, speed: p.sp };
+  return { x: p.x, z: p.z, yaw: p.yaw, ty: p.ty, speed: p.sp, ...raceFields(p) };
+}
+
+// Course : altitude, vol et turbo d'un instantané (interpolés entre `a` et `b`). Rien hors course.
+function raceFields(b, a = b, t = 1) {
+  if (b.y === undefined) return {};
+  return { y: lerp(a.y ?? b.y, b.y, t), air: b.av !== undefined, vy: b.av ?? 0, boost: b.bs > 0 };
 }

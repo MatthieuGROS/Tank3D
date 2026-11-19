@@ -1,6 +1,6 @@
 # Tank 3D
 
-Jeu de chars 3D multijoueur en réseau local (escarmouche en équipes ou campagne coopérative). Un joueur lance le serveur, les autres
+Jeu de chars 3D multijoueur en réseau local (escarmouche en équipes, campagne coopérative ou course). Un joueur lance le serveur, les autres
 ouvrent simplement une adresse dans leur navigateur (rien à installer chez eux).
 
 ## Jouer
@@ -74,6 +74,27 @@ Le cercle blanc à l'écran indique où l'obus va frapper.
 Dans le salon, l'hôte peut ajouter des bots dans chaque équipe avec le bouton **+ Bot**
 (et les retirer avec la croix). Pour une partie solo : rejoins une équipe, ajoute des bots
 en face (et à tes côtés si tu veux), puis lance.
+
+## Course (chacun pour soi)
+
+Mode **Course** (page **Opérations**), sur deux circuits : « La Colline · Circuit » (920 m par tour) et « Vertige Néon · Circuit » (2 070 m, suspendu au-dessus du vide, avec montées, descentes et grands sauts), 1 à 5 tours.
+Pas d'équipes ni de points de vie : on franchit **tous les points de passage dans l'ordre** et on termine les tours avant les autres.
+
+- **Tirs** : un obus ne blesse pas, il **pousse**. Plus le char tireur est puissant (dégâts) et plus le char touché est léger
+  (champ `weight` dans `shared/constants.js`, affiché en tonnes dans la fiche du char), plus la poussée est forte (`pushSpeed` dans `shared/race.js`).
+  Un Lynx touché par un Harpon est projeté à plus de 15 m, un Bastion à peine à quelques mètres.
+- **Obstacles** : tapis turbo, tremplins (la vitesse fait la distance du saut), boue (ralentit surtout les chars légers), rivière
+  (à sauter ou à contourner par le ponton ; à l'eau = retour au dernier point de passage, +3 s), portes coulissantes et barres mobiles
+  (elles dépendent de l'horloge de course, partagée serveur / client), bumpers de flipper.
+- **Vitesses resserrées** : en course les chars sont rapprochés autour d'une même vitesse (`raceDef`), sinon le Bastion n'aurait aucune chance face au Lynx.
+- **R** : retour au dernier point de passage (+3 s). **Tab** : classement. Les bots savent courir (`server/RaceBot.js`).
+- **Vertige Néon** (`shared/maps/course_neon.js`, décor dans `client/src/models/neon.js`) : pas de sol hors de la piste, on **tombe** et on repart du dernier point
+  de passage (+3 s). Le sol est une grille de cases rastérisée à partir de bandes de piste (`strips`, qui permettent fourches, ponts étroits, sauts) ;
+  l'altitude suit un profil `elev` ([[s, hauteur], …], lu par `floorHeight`) ;
+  en plus des obstacles de la Colline : dalles qui s'effacent (`blinks`), lanceurs de gravité (`launch`), rotors (`spinners`), plots (`blocks`).
+  Pas de garde-fous (`rails` existe mais reste vide). Un lanceur au bout d'une ligne droite ouvre un raccourci de 22 m d'abîme face au détour par le réacteur.
+- Ajouter un circuit : décrire le tracé en repère piste (abscisse `s` le long du circuit, décalage latéral `off`) avec `buildRace()`
+  (`shared/race.js`), voir `shared/maps/course_colline.js`, puis l'inscrire dans `RACE_MAPS` (`shared/map.js`).
 
 ## Campagne coopérative
 

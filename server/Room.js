@@ -1,7 +1,7 @@
 // Un salon : joueurs, équipes, déroulement des manches et simulation autoritaire.
 // Le serveur est seul juge : les clients n'envoient que leurs commandes.
-// Deux modes : escarmouche (équipes contre équipes, en manches) et campagne coopérative
-// (missions contre l'IA, pilotées par server/Campaign.js).
+// Trois modes : escarmouche (équipes contre équipes, en manches), campagne coopérative
+// (missions contre l'IA, pilotées par server/Campaign.js) et course (chacun pour soi, server/Race.js).
 import {
   TICK_MS, DT, TICK_RATE, SNAPSHOT_INTERVAL, TEAMS, TANK_TYPES, UNIT_TYPES, DEFAULT_TANK, RULES,
   DIFFICULTIES, CAMPAIGN_RULES, arcRange, arcFlight, faceCoef, dispersionAngle,
@@ -9,12 +9,15 @@ import {
 import {
   rankIndex, RANKS, tankOwned, ownedTanks, tankPrice, fmtCr, skirmishXp, missionXp, skirmishCredits, missionCredits, sumParts,
 } from '../shared/progress.js';
-import { MAPS, DEFAULT_MAP, pointBlocked, withBroken, objectAt, objectKey, DESTRUCTIBLE, heightAt } from '../shared/map.js';
+import { MAPS, RACE_MAPS, DEFAULT_MAP, DEFAULT_RACE_MAP, pointBlocked, withBroken, objectAt, objectKey, DESTRUCTIBLE, heightAt } from '../shared/map.js';
+import { RACE_RULES, pushSpeed } from '../shared/race.js';
 import { MISSIONS, MISSION_INDEX, mapFor, getMission } from '../shared/campaign.js';
 import { createTankState, stepTank, sanitizeInput, pointHitsTank, shellHeight, arcPoint, autoPitch, scatter } from '../shared/tank.js';
 import { detects, SPOT_LINGER, FIRE_REVEAL } from '../shared/vision.js';
 import { NavGrid, BotBrain } from './Bot.js';
 import { UnitBrain } from './Enemy.js';
+import { Race } from './Race.js';
+import { RaceBrain } from './RaceBot.js';
 import { Campaign, isUnlocked } from './Campaign.js';
 import { Accounts } from './Accounts.js';
 import { SKINS, DEFAULT_SKIN, skinUnlocked } from '../shared/skins.js';
@@ -24,7 +27,8 @@ const BOT_NAMES = ['Sgt Morel', 'Cpl Vasseur', 'Lt Garnier', 'Adj Roche', 'Sgt K
 
 const SHELL_STEP = 0.25; // m, pas de test de collision des obus
 const ALL_TANKS = process.env.TANK3D_UNLOCK === '1'; // tous les chars débloqués (tests)
-const MODES = ['skirmish', 'campaign'];
+const MODES = ['skirmish', 'campaign', 'race'];
+const RACE_TEAM = 'red'; // en course tout le monde est dans la même « équipe » : chacun pour soi, personne n'est un ennemi caché
 const VISION_INTERVAL = 3; // ticks entre deux calculs de détection (20 Hz)
 
 export class Room {
@@ -34,7 +38,10 @@ export class Room {
     this.nextId = 1;
     this.nextShellId = 1;
     this.hostId = null;
-    this.settings = { roundsToWin: RULES.defaultRoundsToWin, map: DEFAULT_MAP, mode: 'skirmish', mission: MISSIONS[0].id, difficulty: 'normal' };
+    this.settings = {
+      roundsToWin: RULES.defaultRoundsToWin, map: DEFAULT_MAP, mode: 'skirmish', mission: MISSIONS[0].id, difficulty: 'normal',
+      raceMap: DEFAULT_RACE_MAP, laps: RACE_RULES.defaultLaps,
+    };
     // tant que l'hôte n'a pas choisi une autre mission, on propose la plus avancée débloquée
     this.autoMission = true;
     this.navs = new Map(); // grilles de navigation des bots, par carte et par taille de char
@@ -43,6 +50,7 @@ export class Room {
     this.timers = []; // actions différées (barrages d'artillerie)
     this.stateDirty = false;
     this.campaign = new Campaign(this);
+    this.race = new Race(this);
     this.accounts = new Accounts();
     this.debrief = null;
     this.paused = false; // partie mise en pause par l'hôte
@@ -56,6 +64,10 @@ export class Room {
 
   get isCampaign() {
     return this.settings.mode === 'campaign';
+  }
+
+  get isRace() {
+    return this.settings.mode === 'race';
   }
 
   // Carte d'origine (données fixes)
@@ -137,6 +149,8 @@ export class Room {
           for (const t of due) t.fn();
         }
         this.campaign.step();
+      } else if (this.isRace) {
+        this.race.step();
       } else {
         this.stepZone();
         if (this.phase === 'playing') this.checkElimination();
@@ -195,10 +209,10 @@ export class Room {
   }
 
   addBot(team) {
-    if (this.teamMembers(team).length >= RULES.maxPlayersPerTeam) return;
+    if (this.teamMembers(team).length >= (this.isRace ? RACE_RULES.maxPlayers : RULES.maxPlayersPerTeam)) return;
     const used = new Set([...this.players.values()].map((p) => p.name));
     const name = BOT_NAMES.find((n) => !used.has(n)) ?? `Bot ${this.nextId}`;
-    const p = this.newPlayer({ bot: true, brain: new BotBrain(), name, joined: true, team });
+    const p = this.newPlayer({ bot: true, brain: this.isRace ? new RaceBrain() : new BotBrain(), name, joined: true, team });
     this.players.set(p.id, p);
     this.stateDirty = true;
   }
@@ -229,7 +243,7 @@ export class Room {
     p.account = null;
     if (!this.players.delete(p.id)) return;
     if (!p.bot) console.log(`  - ${p.name} a quitté le salon`);
-    if (p.inRound && p.alive) this.events.push({ k: 'kill', by: null, id: p.id });
+    if (p.inRound && p.alive && !this.isRace) this.events.push({ k: 'kill', by: null, id: p.id });
     if (p.inRound) this.checkSquadLeft();
     const humans = this.humans();
     if (this.hostId === p.id) this.hostId = (humans.find((h) => h.local) ?? humans[0])?.id ?? null;
@@ -247,7 +261,7 @@ export class Room {
   // disparaît comme s'il avait été détruit, il entrera de nouveau à la prochaine manche s'il a une équipe.
   leaveRound(p) {
     if (!p.inRound) return;
-    if (p.alive) this.events.push({ k: 'kill', by: null, id: p.id });
+    if (p.alive && !this.isRace) this.events.push({ k: 'kill', by: null, id: p.id });
     p.inRound = false;
     p.alive = false;
     p.respawn = 0;
@@ -426,8 +440,13 @@ export class Room {
         this.broadcast({ type: 'chat', id: p.id, name: p.name, team: p.team, text });
         break;
       }
+      case 'respawn':
+        // course : retour au dernier point de passage (touche R), avec pénalité
+        if (this.isRace && this.phase === 'playing' && p.inRound && p.race && !p.race.fin && this.allow(p, 'respawnAt', 2500)) this.race.respawn(p, 'manual');
+        break;
       case 'mark': {
         // signalement sur la carte (point, ou char ennemi ciblé), envoyé aux seuls coéquipiers
+        if (this.isRace) return;
         const x = Number(msg.x), z = Number(msg.z);
         if (!Number.isFinite(x) || !Number.isFinite(z) || !this.allow(p, 'markAt', 300)) return;
         const m = this.map;
@@ -443,8 +462,9 @@ export class Room {
       case 'team': {
         let team = msg.team === null ? null : TEAMS.includes(msg.team) ? msg.team : undefined;
         if (this.isCampaign && team) team = CAMPAIGN_RULES.playerTeam; // en campagne, tout le monde est dans l'escouade
+        if (this.isRace && team) team = RACE_TEAM; // en course, tout le monde est sur la grille
         if (team === undefined || team === p.team) return;
-        if (team && this.teamMembers(team).length >= RULES.maxPlayersPerTeam) return;
+        if (team && this.teamMembers(team).length >= (this.isRace ? RACE_RULES.maxPlayers : RULES.maxPlayersPerTeam)) return;
         // Partie lancée : les équipes de la partie sont figées jusqu'à sa fin (toutes les manches). Un joueur de la
         // partie ne peut que passer en spectateur, et n'y revient plus. Les autres (arrivés en cours de route, ou
         // sortis) peuvent choisir leur équipe pour la PROCHAINE partie : ils regardent celle-ci en spectateurs.
@@ -515,16 +535,18 @@ export class Room {
         if (!isHost || this.phase !== 'lobby') return;
         if (Number.isInteger(msg.roundsToWin) && msg.roundsToWin >= 1 && msg.roundsToWin <= 9) this.settings.roundsToWin = msg.roundsToWin;
         if (typeof msg.map === 'string' && Object.hasOwn(MAPS, msg.map)) this.settings.map = msg.map;
+        if (typeof msg.raceMap === 'string' && Object.hasOwn(RACE_MAPS, msg.raceMap)) this.settings.raceMap = msg.raceMap;
         if (MODES.includes(msg.mode) && msg.mode !== this.settings.mode) this.setMode(msg.mode);
         if (typeof msg.mission === 'string' && Object.hasOwn(MISSION_INDEX, msg.mission) && this.missionOpen(msg.mission)) {
           this.settings.mission = msg.mission;
           this.autoMission = msg.mission === this.latestMission();
         }
         if (Object.hasOwn(DIFFICULTIES, msg.difficulty)) this.settings.difficulty = msg.difficulty;
+        if (RACE_RULES.laps.includes(msg.laps)) this.settings.laps = msg.laps;
         this.stateDirty = true;
         break;
       case 'addBot':
-        if (isHost && this.phase === 'lobby' && TEAMS.includes(msg.team)) this.addBot(this.isCampaign ? CAMPAIGN_RULES.playerTeam : msg.team);
+        if (isHost && this.phase === 'lobby' && TEAMS.includes(msg.team)) this.addBot(this.isCampaign ? CAMPAIGN_RULES.playerTeam : this.isRace ? RACE_TEAM : msg.team);
         break;
       case 'removeBot': {
         const bot = this.players.get(msg.id);
@@ -555,6 +577,22 @@ export class Room {
   // Changer de mode : en campagne, tout le monde rejoint l'escouade et les bots d'en face partent.
   setMode(mode) {
     this.settings.mode = mode;
+    if (mode === 'race') {
+      // tout le monde sur la grille ; les bots reçoivent un pilote de course (dans la limite des places)
+      let n = 0;
+      for (const p of [...this.players.values()]) {
+        if (p.unit) { this.players.delete(p.id); continue; }
+        if (p.team && ++n > RACE_RULES.maxPlayers) {
+          if (p.bot) this.players.delete(p.id);
+          else p.team = null;
+          continue;
+        }
+        if (p.team) p.team = RACE_TEAM;
+        if (p.bot) p.brain = new RaceBrain();
+      }
+      return;
+    }
+    for (const p of this.players.values()) if (p.bot && !p.unit && !(p.brain instanceof BotBrain)) p.brain = new BotBrain();
     if (mode !== 'campaign') return;
     this.checkMission();
     for (const p of [...this.players.values()]) {
@@ -622,6 +660,16 @@ export class Room {
         if (!p.alive && p.respawn > 0) o.rs = p.respawn;
         if (p.buffs?.damage > 0) o.db = 1;
         if (p.spotted) o.vi = 1; // visible par l'équipe adverse
+        if (this.isRace) {
+          // course : altitude, vol, poussée reçue et turbo (même état que la simulation partagée)
+          const t = p.tank;
+          o.y = +t.y.toFixed(2);
+          if (t.air) o.av = +t.vy.toFixed(2);
+          if (t.kx || t.kz) { o.kx = +t.kx.toFixed(2); o.kz = +t.kz.toFixed(2); }
+          if (t.kw) o.kw = +t.kw.toFixed(3);
+          if (t.boost > 0) o.bs = t.boost;
+          if (p.race?.hold > 0) o.hd = 1;
+        }
         return o;
       }),
     };
@@ -629,6 +677,7 @@ export class Room {
       msg.cm = this.campaign.info();
       msg.pk = this.campaign.pickups.map((pk) => [pk.id, pk.k, +pk.x.toFixed(2), +pk.z.toFixed(2)]);
     }
+    if (this.isRace && this.phase !== 'lobby') msg.rc = this.race.info();
     const body = JSON.stringify(msg).slice(1);
     for (const p of this.players.values()) {
       // `ack` = dernière commande du joueur prise en compte : sert à la réconciliation côté client
@@ -668,6 +717,7 @@ export class Room {
     this.teamActive = { red: false, blue: false };
     this.debrief = null;
     this.campaign.done = true;
+    this.race.done = true;
     this.checkMission(); // retour au salon : une mission vient peut-être d'être débloquée
     this.clearUnits();
     for (const p of this.players.values()) {
@@ -690,6 +740,7 @@ export class Room {
       p.inMatch = !!p.team && !p.unit;
     }
     if (this.isCampaign) this.startMission();
+    else if (this.isRace) this.startRace();
     else this.startRound();
   }
 
@@ -763,6 +814,35 @@ export class Room {
     this.stateDirty = true;
   }
 
+  // Course : tout le monde sur la grille, compte à rebours, puis feu vert (server/Race.js).
+  startRace() {
+    this.round = 1;
+    this.resetDecor();
+    this.shells = [];
+    this.timers = [];
+    this.debrief = null;
+    this.clearUnits();
+    for (const p of this.players.values()) p.inRound = false;
+    for (const p of this.matchMembers(RACE_TEAM)) {
+      p.maxHp = p.hp = TANK_TYPES[p.type].maxHp;
+      if (p.bot) p.brain = new RaceBrain();
+    }
+    this.race.start(this.settings.laps);
+    this.phase = 'countdown';
+    this.phaseTicks = RULES.countdownTicks;
+    this.events.push({ k: 'raceStart', laps: this.settings.laps });
+    this.stateDirty = true;
+  }
+
+  endRace(result) {
+    this.debrief = result;
+    this.phase = 'debrief';
+    this.phaseTicks = 0;
+    this.events.push({ k: 'raceEnd', first: result.results[0]?.id ?? null });
+    console.log(`  Course terminée : ${result.results.map((r) => `${r.rank}. ${r.name}`).join(', ')}`);
+    this.stateDirty = true;
+  }
+
   endMission(result) {
     this.debrief = result;
     this.phase = 'debrief';
@@ -789,7 +869,7 @@ export class Room {
     switch (this.phase) {
       case 'countdown':
         this.phase = 'playing';
-        this.phaseTicks = this.isCampaign ? Infinity : RULES.roundTicks; // pas de limite de temps en campagne
+        this.phaseTicks = this.isCampaign || this.isRace ? Infinity : RULES.roundTicks; // pas de limite de temps en campagne ni en course (voir Race)
         this.stateDirty = true;
         break;
       case 'playing': {
@@ -819,7 +899,8 @@ export class Room {
   // ----------------------------------------------------------- simulation
 
   stepTanks() {
-    const frozen = this.phase === 'countdown';
+    const countdown = this.phase === 'countdown';
+    const clock = this.isRace ? this.race.clock : 0;
     const all = this.roundPlayers();
     const discs = all.map((o) => ({ x: o.tank.x, z: o.tank.z, r: this.defOf(o).radius }));
     for (let i = 0; i < all.length; i++) {
@@ -830,10 +911,12 @@ export class Room {
       p.tokens = Math.min(p.tokens + 1.1, 15);
       if (!p.bot && !p.queue.length) continue;
       const def = this.defOf(p);
+      const frozen = countdown || p.race?.hold > 0; // course : bloqué un instant après un retour en piste
       const others = def.static ? null : discs.filter((_, j) => j !== i);
       if (p.bot) {
-        const cmd = p.brain instanceof UnitBrain ? p.brain.think(p, this, def) : p.brain.think(p, this, this.nav, def);
-        if (stepTank(p.tank, cmd, def, this.map, others, frozen)) this.fire(p, def);
+        const cmd = p.brain instanceof RaceBrain ? p.brain.think(p, this, def)
+          : p.brain instanceof UnitBrain ? p.brain.think(p, this, def) : p.brain.think(p, this, this.nav, def);
+        if (stepTank(p.tank, cmd, def, this.map, others, frozen, clock)) this.fire(p, def);
         discs[i].x = p.tank.x;
         discs[i].z = p.tank.z;
         continue;
@@ -843,7 +926,7 @@ export class Room {
         p.tokens--;
         p.lastSeq = inp.seq;
         p.range = inp.rg;
-        if (stepTank(p.tank, inp, def, this.map, others, frozen)) this.fire(p, def);
+        if (stepTank(p.tank, inp, def, this.map, others, frozen, clock)) this.fire(p, def);
       }
       discs[i].x = p.tank.x;
       discs[i].z = p.tank.z;
@@ -855,7 +938,7 @@ export class Room {
   // En campagne, tout le monde reste visible (missions, objectifs et IA n'en tiennent pas compte).
   stepVision() {
     const all = this.roundPlayers();
-    if (this.isCampaign) {
+    if (this.isCampaign || this.isRace) {
       for (const p of all) p.spotted = true;
       return;
     }
@@ -925,11 +1008,11 @@ export class Room {
     // carte à relief : le canon part de l'altitude du sol, avec visée verticale automatique
     // (sans cible dans la ligne de tir, l'obus vole à hauteur commune au-dessus du sol `g`)
     let y0 = def.muzzleHeight, vy, g = 0;
-    if (this.map.hills) {
-      g = heightAt(x, z, this.map);
+    if (this.map.hills || this.map.race?.floor) { // circuit au-dessus du vide : la piste monte et descend aussi
+      g = this.isRace ? p.tank.y : heightAt(x, z, this.map); // course : le canon part de l'altitude réelle du char (tremplins, vol)
       y0 += g;
       const foes = [];
-      for (const o of this.roundPlayers()) if (o.alive && o.team !== p.team) foes.push(o.tank);
+      for (const o of this.roundPlayers()) if (o.alive && (this.isRace ? o !== p : o.team !== p.team)) foes.push(o.tank);
       vy = autoPitch(x, z, angle, y0, foes, this.map, def.shellSpeed); // visée sur la cible, avant dispersion
       if (vy !== undefined && err) vy += err.v;
     }
@@ -995,7 +1078,7 @@ export class Room {
           return false;
         }
         for (const p of tanks) {
-          if (p.id !== s.owner && pointHitsTank(s.x, s.y, s.z, p.tank, this.defOf(p), hills ? heightAt(p.tank.x, p.tank.z, this.map) : 0)) {
+          if (p.id !== s.owner && pointHitsTank(s.x, s.y, s.z, p.tank, this.defOf(p), this.isRace ? p.tank.y : hills ? heightAt(p.tank.x, p.tank.z, this.map) : 0)) {
             this.explode(s, p);
             return false;
           }
@@ -1034,6 +1117,10 @@ export class Room {
   explode(s, victim) {
     this.events.push({ k: 'boom', id: s.id, x: +s.x.toFixed(2), y: +s.y.toFixed(2), z: +s.z.toFixed(2), hit: victim ? victim.id : null, r: s.splash });
     if (this.phase !== 'playing') return;
+    if (this.isRace) {
+      this.racePush(s, victim);
+      return;
+    }
     const canHurt = (p) => p.alive && p.id !== s.owner && (RULES.friendlyFire || p.team !== s.team);
     // direct : la face touchée dépend de la direction de l'obus ; souffle : de la direction explosion → char
     if (victim && canHurt(victim)) this.damage(victim, s.damage * faceCoef(this.defOf(victim), victim.tank.yaw, s.dx, s.dz), s.owner);
@@ -1043,6 +1130,44 @@ export class Room {
       const d = Math.max(0, Math.hypot(p.tank.x - s.x, p.tank.z - s.z) - this.defOf(p).radius * 0.5);
       if (d < s.splash) this.damage(p, s.splashDamage * (1 - d / s.splash) * faceCoef(this.defOf(p), p.tank.yaw, p.tank.x - s.x, p.tank.z - s.z), s.owner);
     }
+  }
+
+  // Course : un obus ne fait aucun dégât, il pousse. Plus le char tireur est puissant (dégâts), plus la poussée est forte ;
+  // plus le char touché est léger, plus il est repoussé loin. Le souffle pousse aussi, plus faiblement avec la distance.
+  racePush(s, victim) {
+    if (victim && victim.alive && victim.id !== s.owner) this.pushTank(victim, s.dx, s.dz, s.damage, s.owner);
+    if (!s.splash) return;
+    for (const p of this.roundPlayers()) {
+      if (p === victim || !p.alive || p.id === s.owner) continue;
+      const dx = p.tank.x - s.x, dz = p.tank.z - s.z;
+      const d = Math.max(0, Math.hypot(dx, dz) - this.defOf(p).radius * 0.5);
+      if (d < s.splash) this.pushTank(p, dx || s.dx, dz || s.dz, s.splashDamage * (1 - d / s.splash), s.owner);
+    }
+  }
+
+  // Applique une poussée : vitesse = dégâts / poids. Un gros choc fait aussi décoller le char.
+  pushTank(p, dx, dz, power, byId) {
+    const v = pushSpeed(power, this.defOf(p).weight);
+    if (v < 1) return;
+    const d = Math.hypot(dx, dz) || 1, t = p.tank;
+    t.kx += (dx / d) * v;
+    t.kz += (dz / d) * v;
+    const k = Math.hypot(t.kx, t.kz);
+    if (k > RACE_RULES.maxKnock) { t.kx *= RACE_RULES.maxKnock / k; t.kz *= RACE_RULES.maxKnock / k; }
+    // dérapage : la caisse part en toupie. Un coup de flanc fait beaucoup tourner, un coup dans l'axe un peu (côté au hasard).
+    const side = (Math.cos(t.yaw) * dx - Math.sin(t.yaw) * dz) / d; // -1..1 : composante latérale de la poussée
+    const sign = Math.abs(side) > 0.15 ? Math.sign(side) : Math.random() < 0.5 ? -1 : 1;
+    const spin = sign * (0.35 + 0.65 * Math.abs(side)) * v * RACE_RULES.spinScale;
+    t.kw = Math.max(-RACE_RULES.maxSpin, Math.min(RACE_RULES.maxSpin, (t.kw ?? 0) + spin));
+    t.speed *= 0.45;
+    if (v > 12 && !t.air) {
+      t.air = true;
+      t.vy = Math.min(4.5, v * 0.16);
+      t.y += 0.05;
+    }
+    const by = this.players.get(byId);
+    if (by?.race) by.race.pushes++;
+    this.events.push({ k: 'push', id: p.id, by: byId, v: +v.toFixed(1) });
   }
 
   damage(p, amount, byId) {

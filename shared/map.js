@@ -8,6 +8,9 @@
 import { OASIS } from './maps/oasis.js';
 import { RIVES } from './maps/rives.js';
 import { COLLINE } from './maps/colline.js';
+import { COURSE_COLLINE } from './maps/course_colline.js';
+import { COURSE_NEON } from './maps/course_neon.js';
+import { rampHeight, floorHeight } from './race.js';
 
 // Symétrie centrale : chaque obstacle est dupliqué en (-x, -z) pour une carte équitable.
 function mirror(list) {
@@ -53,6 +56,9 @@ const OUTPOST = {
 
 export const MAPS = { outpost: OUTPOST, oasis: OASIS, rives: RIVES, colline: COLLINE };
 export const DEFAULT_MAP = 'outpost';
+// Circuits du mode course : cartes à part, jamais proposées en escarmouche.
+export const RACE_MAPS = { colline: COURSE_COLLINE, neon: COURSE_NEON };
+export const DEFAULT_RACE_MAP = 'colline';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
@@ -153,6 +159,14 @@ export function collideDiscs(p, r, discs) {
 // jusqu'au sol (hauteur 0) sur l'ellipse extérieure (rx, rz). Une carte sans `hills` est plate :
 // toutes les fonctions ci-dessous renvoient alors tout de suite le résultat d'avant.
 export function heightAt(x, z, map) {
+  const ground = groundAt(x, z, map);
+  return map.race?.ramps.length ? ground + rampHeight(map.race, x, z) : ground;
+}
+
+// Relief naturel seul (collines), sans les rampes d'une carte de course : sert au maillage du terrain,
+// au freinage en montée et à la pose des rampes.
+export function groundAt(x, z, map) {
+  if (map.race?.floor) return floorHeight(map.race, x, z); // circuit au-dessus du vide : montées et descentes
   const hills = map.hills;
   if (!hills) return 0;
   let best = 0;
@@ -172,7 +186,7 @@ export function heightAt(x, z, map) {
 // Pente du sol (montée / distance) dans la direction (fx, fz) unitaire.
 export function slopeAlong(x, z, fx, fz, map) {
   const e = 1.5;
-  return (heightAt(x + fx * e, z + fz * e, map) - heightAt(x, z, map)) / e;
+  return (groundAt(x + fx * e, z + fz * e, map) - groundAt(x, z, map)) / e; // les rampes ne freinent pas
 }
 
 // Le point (x, z) est-il dans un buisson (map.flats de genre 'bush', sans collision), ou à moins de `margin` m de l'un d'eux ?
@@ -187,7 +201,7 @@ export function inBush(x, z, map, margin = 0) {
 
 // Un point 3D est-il dans le décor (sol, bords, obstacle) ? Sert aux obus, à la caméra, aux lignes de vue.
 export function pointBlocked(x, y, z, map) {
-  if (map.hills ? y <= heightAt(x, z, map) : y <= 0) return true;
+  if (map.hills || map.race?.floor ? y <= heightAt(x, z, map) : y <= 0) return true;
   if (Math.abs(x) >= map.halfX || Math.abs(z) >= map.halfZ) return y < map.wallHeight || Math.abs(x) > map.halfX + 30 || Math.abs(z) > map.halfZ + 30;
   for (const b of map.boxes) {
     if (y < b.h && Math.abs(x - b.x) < b.w / 2 && Math.abs(z - b.z) < b.d / 2) return true;
