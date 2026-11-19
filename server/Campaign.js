@@ -630,7 +630,7 @@ export class Campaign {
       }
       case 'boss': {
         const b = this.boss;
-        out.v = b?.shieldedBy ? `Bouclier · ${this.units().filter((u) => u.alive && u.tag === b.shieldedBy).length} générateurs` : b ? `${Math.ceil((b.hp / b.maxHp) * 100)} %` : '';
+        out.v = b?.shieldedBy ? ((n) => `Bouclier · ${n} générateur${n > 1 ? 's' : ''}`)(this.units().filter((u) => u.alive && u.tag === b.shieldedBy).length) : b ? `${Math.ceil((b.hp / b.maxHp) * 100)} %` : '';
         out.p = b ? 1 - b.hp / b.maxHp : 0;
         break;
       }

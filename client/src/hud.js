@@ -203,7 +203,8 @@ export class Hud {
 
   // Mode campagne : panneau de mission à la place du tableau des scores.
   setCampaignMode(on) {
-    this.el.scorebar.classList.toggle('hidden', on);
+    this.campaignOn = on;
+    this.el.scorebar.classList.toggle('hidden', on || !!this.raceOn); // bandeau d'escarmouche : ni en campagne ni en course
     this.el.mission.classList.toggle('hidden', !on);
     if (!on) this.el.boss.classList.add('hidden');
   }
@@ -236,6 +237,9 @@ export class Hud {
     this.el.bossFill.style.width = `${(boss.hp / boss.max) * 100}%`;
     this.el.boss.classList.toggle('shielded', !!boss.shield);
     this.el.bossHp.textContent = boss.shield ? 'Bouclier actif' : `${Math.ceil(boss.hp)} / ${boss.max}`;
+    // sous le panneau de mission, quelle que soit sa hauteur (objectif sur deux lignes, écran tactile…)
+    const m = this.el.mission.getBoundingClientRect(), hud = this.el.boss.offsetParent?.getBoundingClientRect();
+    if (m.height && hud) this.el.boss.style.top = `${Math.round(m.bottom - hud.top + 12)}px`;
   }
 
   // Petit message temporaire sous le panneau de mission. c = red | blue | amber | green
@@ -275,7 +279,8 @@ export class Hud {
   // ---------------------------------------------------------------- course
   setRaceMode(on) {
     for (const e of [this.el.racebar, this.el.rbBoard, this.el.speedo, this.el.helpRace]) e.classList.toggle('hidden', !on);
-    this.el.scorebar.classList.toggle('hidden', on);
+    this.raceOn = on;
+    this.el.scorebar.classList.toggle('hidden', on || !!this.campaignOn);
     if (!on) for (const e of [this.el.cpmark, this.el.wrong, this.el.rbEnd]) e.classList.add('hidden');
   }
 
