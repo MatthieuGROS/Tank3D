@@ -1172,7 +1172,7 @@ export class Room {
 
   damage(p, amount, byId) {
     if (this.isCampaign) {
-      p.brain?.alert?.();
+      p.brain?.alert?.(byId, this.tick);
       amount = this.campaign.modifyDamage(p, amount, byId);
     }
     // un char touché est détecté par l'équipe adverse pendant SPOT_LINGER s

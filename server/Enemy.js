@@ -15,6 +15,7 @@ const rand = (a, b) => a + Math.random() * (b - a);
 const REPATH_TICKS = 30;
 const SCAN_TICKS = 6;
 const AGGRO = 50; // un garde se réveille si un ennemi passe à moins de 50 m en vue directe
+const PROVOKE_TICKS = 12 * TICK_RATE; // le tireur reste repéré 12 s après son dernier impact
 
 export class UnitBrain {
   // skill = { reaction (s), aim (rad) }
@@ -39,9 +40,11 @@ export class UnitBrain {
     this.lastKnown = null;
   }
 
-  // Touché : un garde part à l'assaut.
-  alert() {
+  // Touché : un garde part à l'assaut, et le tireur devient une cible même au-delà de la portée de vue
+  // (sinon on pourrait abattre un boss ou la Citadelle de l'autre bout de la carte sans qu'ils réagissent).
+  alert(byId, tick) {
     if (this.mode === 'guard') this.awake = true;
+    if (byId != null) this.provoked = { id: byId, until: tick + PROVOKE_TICKS };
   }
 
   // Cible : l'ennemi le plus « intéressant » (proche, en vue, de préférence pas un bâtiment).
@@ -49,13 +52,17 @@ export class UnitBrain {
     const me = p.tank, map = room.map;
     const mortar = def.weapon === 'mortar';
     let best = null, bestScore = Infinity, bestVisible = false, nearest = null, nearestD = Infinity;
+    if (this.provoked && room.tick > this.provoked.until) this.provoked = null;
+    // portée des obus : un tireur qui nous touche de plus loin que la vue reste à portée de riposte
+    const maxReach = mortar ? def.range ?? 80 : Math.max(def.range ?? 80, (def.shellSpeed * def.shellLifeTicks) / TICK_RATE - 5);
     for (const o of room.roundPlayers()) {
       if (!o.alive || o.team === p.team) continue;
       const odef = room.defOf(o);
       const dx = o.tank.x - me.x, dz = o.tank.z - me.z;
       const d = Math.hypot(dx, dz);
       if (!odef.structure && d < nearestD) { nearestD = d; nearest = o; }
-      if (d > (def.range ?? 80)) continue;
+      const provoker = this.provoked?.id === o.id;
+      if (d > (provoker ? maxReach : def.range ?? 80)) continue;
       if (mortar && d < def.minRange) continue;
       const reach = d - odef.radius * 0.6;
       const clear = d < 5 || marchRay(me.x, SHELL_FLIGHT_Y + 0.1, me.z, dx / d, 0, dz / d, reach, 1, map) >= reach;
@@ -64,7 +71,7 @@ export class UnitBrain {
       const shielded = room.campaign?.isShielded(o) ? 200 : 0; // inutile de tirer sur un bouclier
       // les alliés pilotés visent d'abord les objectifs de la mission (dépôts, usines, générateurs)
       const objective = this.mode === 'ally' && (o.obj || o.tag === 'gen') ? -45 : 0;
-      const score = d + (odef.structure ? 35 : 0) + (odef.static ? 10 : 0) + (clear ? 0 : 20) + shielded + objective;
+      const score = d + (odef.structure ? 35 : 0) + (odef.static ? 10 : 0) + (clear ? 0 : 20) + shielded + objective - (provoker ? 40 : 0);
       if (score < bestScore) { bestScore = score; best = o; bestVisible = clear; }
     }
     // un garde se réveille dès qu'un ennemi est proche et visible
