@@ -366,9 +366,10 @@ export class Renderer {
     }
   }
 
-  // Point mis en valeur au salon : départ de la mission en campagne, zone centrale sinon.
+  // Point mis en valeur au salon : départ de la mission en campagne, point choisi par la carte
+  // (map.showcase, quand le centre de la zone est encombré), zone centrale sinon.
   focus() {
-    return this.map.playerSpawn ?? this.map.zone ?? { x: 0, z: 0 };
+    return this.map.playerSpawn ?? this.map.showcase ?? this.map.zone ?? { x: 0, z: 0 };
   }
 
   // Bonus : caisses flottantes qui tournent, avec un faisceau lumineux. list = [[id, kind, x, z]]

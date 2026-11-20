@@ -78,11 +78,27 @@ export function createMapModel(map) {
   const c = new THREE.Color();
   for (let i = 0; i < groundGeo.attributes.position.count; i++) {
     c.setHSL(theme.ground[0] + rand() * 0.04, theme.ground[1] + rand() * 0.08, theme.ground[2] + rand() * 0.07);
+    paintGround(map, c, groundGeo.attributes.position.getX(i), groundGeo.attributes.position.getZ(i), rand);
     colors.push(c.r, c.g, c.b);
   }
   groundGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  // carte à relief : le grand plan passe sous le maillage de l'arène (sinon les deux se disputent l'affichage)
-  if (!voidMap) add(groundGeo, new THREE.MeshLambertMaterial({ vertexColors: true }), 0, hills ? -0.08 : 0, 0, false);
+  // carte à relief : le grand plan passe sous le maillage de l'arène (sinon les deux se disputent l'affichage).
+  // Avec des creux (oued, tranchée), il les masquerait : on le perce à l'emplacement de l'arène.
+  const dips = hills && map.hills.some((o) => o.h < 0);
+  if (!voidMap && dips) {
+    const half = groundSize / 2;
+    const frame = new THREE.Shape([new THREE.Vector2(-half, -half), new THREE.Vector2(half, -half), new THREE.Vector2(half, half), new THREE.Vector2(-half, half)]);
+    frame.holes.push(new THREE.Path([new THREE.Vector2(-map.halfX, -map.halfZ), new THREE.Vector2(-map.halfX, map.halfZ), new THREE.Vector2(map.halfX, map.halfZ), new THREE.Vector2(map.halfX, -map.halfZ)]));
+    const geo = new THREE.ShapeGeometry(frame).rotateX(Math.PI / 2);
+    const fc = [];
+    for (let i = 0; i < geo.attributes.position.count; i++) {
+      c.setHSL(theme.ground[0] + rand() * 0.04, theme.ground[1] + rand() * 0.08, theme.ground[2] + rand() * 0.07);
+      paintGround(map, c, geo.attributes.position.getX(i), geo.attributes.position.getZ(i), rand);
+      fc.push(c.r, c.g, c.b);
+    }
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(fc, 3));
+    add(geo, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }), 0, -0.08, 0, false);
+  } else if (!voidMap) add(groundGeo, new THREE.MeshLambertMaterial({ vertexColors: true }), 0, hills ? -0.08 : 0, 0, false);
 
   if (voidMap) {
     // rien : le vide
@@ -92,12 +108,14 @@ export function createMapModel(map) {
     const nx = Math.round((map.halfX * 2) / 2.5), nz = Math.round((map.halfZ * 2) / 2.5);
     const geo = new THREE.PlaneGeometry(map.halfX * 2, map.halfZ * 2, nx, nz).rotateX(-Math.PI / 2);
     const pos = geo.attributes.position, cols = [];
-    const grass = new THREE.Color(), top = new THREE.Color(theme.hill), maxH = Math.max(...map.hills.map((o) => o.h));
+    const grass = new THREE.Color(), top = new THREE.Color(theme.hill), maxH = Math.max(1, ...map.hills.map((o) => o.h));
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i), z = pos.getZ(i), h = groundAt(x, z, map); // relief naturel : les rampes de course ont leur propre maillage
       pos.setY(i, h);
       grass.setHSL(theme.ground[0] + r2() * 0.03, theme.ground[1] + r2() * 0.06, theme.ground[2] + r2() * 0.05);
-      grass.lerp(top, Math.min(0.6, (h / maxH) * 0.6)); // le sommet est plus clair
+      const painted = paintGround(map, grass, x, z, r2);
+      if (h > 0) grass.lerp(top, Math.min(0.6, (h / maxH) * 0.6) * (1 - painted)); // le sommet est plus clair
+      else if (h < 0) grass.multiplyScalar(1 + h * 0.045); // fond d'un creux : plus sombre
       cols.push(grass.r, grass.g, grass.b);
     }
     geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
@@ -112,10 +130,11 @@ export function createMapModel(map) {
   // Murs d'enceinte (invisibles au-dessus du vide : on ne les atteint pas)
   const wallMat = mat(0x8a8f93);
   const t = 1.2, h = map.wallHeight;
+  const lo = hills ? Math.min(0, ...map.hills.map((o) => o.h)) : 0; // un creux peut longer le mur : il descend jusqu'au fond
   if (!voidMap) {
     for (const s of [-1, 1]) {
-      add(new THREE.BoxGeometry(map.halfX * 2 + t * 2, h, t), wallMat, 0, h / 2, s * (map.halfZ + t / 2));
-      add(new THREE.BoxGeometry(t, h, map.halfZ * 2), wallMat, s * (map.halfX + t / 2), h / 2, 0);
+      add(new THREE.BoxGeometry(map.halfX * 2 + t * 2, h - lo, t), wallMat, 0, (h + lo) / 2, s * (map.halfZ + t / 2));
+      add(new THREE.BoxGeometry(t, h - lo, map.halfZ * 2), wallMat, s * (map.halfX + t / 2), (h + lo) / 2, 0);
     }
   }
 
@@ -123,14 +142,25 @@ export function createMapModel(map) {
   const snowMat = mat(0xf4f8fb);
   const roofMat = mat(0x6a4a3c), concreteMat = mat(0x9a9d9f), trimMat = mat(0x55595c);
   const PROPS = propBuilders({ theme, group, mat, add, snowMat, concreteMat, trimMat });
+  // carte à relief : un objet posé sur le sol (shared/map.js : settle) a `base` = altitude du sol et `h` absolu.
+  // On le construit comme au niveau 0 (hauteur propre h - base), puis on remonte ses maillages de `base`.
+  const local = (o) => (o.base ? { ...o, h: o.h - o.base } : o);
+  const lift = (from, base) => {
+    if (base) for (let k = from; k < group.children.length; k++) group.children[k].position.y += base;
+  };
   // éléments à plat (routes, ponts) : posés en premier, ils ne bloquent rien
-  for (const f of map.flats ?? []) PROPS[f.kind]?.(f);
+  for (const f of map.flats ?? []) {
+    const from = group.children.length;
+    PROPS[f.kind]?.(f);
+    lift(from, f.base);
+  }
   const bushes = buildBushes(map, theme, mat, group);
   // maillages de chaque objet ('b3', 'c7'…) : pour masquer un objet détruit
   const objects = new Map();
   const track = (key, from) => objects.set(key, group.children.slice(from));
-  map.boxes.forEach((b, i) => {
+  map.boxes.forEach((b0, i) => {
     const from = group.children.length;
+    const b = local(b0);
     if (b.kind === 'building') {
       add(new THREE.BoxGeometry(b.w, b.h, b.d), mat(BUILDING_COLORS[i % BUILDING_COLORS.length]), b.x, b.h / 2, b.z);
       add(new THREE.BoxGeometry(b.w + 0.8, 0.4, b.d + 0.8), theme.snowy ? snowMat : roofMat, b.x, b.h + 0.2, b.z);
@@ -146,14 +176,16 @@ export function createMapModel(map) {
       add(new THREE.BoxGeometry(b.w + 0.15, 0.25, b.d + 0.15), trimMat, b.x, b.h - 0.12, b.z);
       add(new THREE.BoxGeometry(b.w + 0.15, 0.25, b.d + 0.15), trimMat, b.x, 0.12, b.z);
     }
+    lift(from, b0.base);
     track(`b${i}`, from);
   });
 
   // Rochers et arbres
   const rockMat = mat(theme.rock), trunkMat = mat(0x6b4a2e), leafMat = mat(theme.leaf[0]), leafMat2 = mat(theme.leaf[1]);
   const duneMat = mat(theme.dune ?? 0xd6b679);
-  map.circles.forEach((o, i) => {
+  map.circles.forEach((o0, i) => {
     const from = group.children.length;
+    const o = local(o0);
     if (o.kind === 'dune') {
       // dune : demi-sphère aplatie (bloque les chars et les obus jusqu'à sa hauteur)
       const geo = new THREE.SphereGeometry(o.r, 12, 5, 0, Math.PI * 2, 0, Math.PI / 2);
@@ -185,6 +217,7 @@ export function createMapModel(map) {
       add(new THREE.ConeGeometry(1.8, 3.0, 7), leafMat2, o.x, 7.3, o.z);
       if (theme.snowy) add(new THREE.ConeGeometry(1.0, 1.4, 7), snowMat, o.x, 8.4, o.z, false);
     }
+    lift(from, o0.base);
     track(`c${i}`, from);
   });
 
@@ -202,6 +235,18 @@ export function createMapModel(map) {
     const x = Math.cos(a) * d * 1.15, z = Math.sin(a) * d;
     if (Math.abs(x) < map.halfX + 5 && Math.abs(z) < map.halfZ + 5) continue;
     add(new THREE.ConeGeometry(2.4, 7, 6), farTree, x, 3.5, z, false);
+  }
+
+  // Silhouettes de tours au loin (map.skyline = rectangle hors de l'arène où les semer), noyées dans la brume
+  if (map.skyline) {
+    const sk = map.skyline, r3 = rng(9090);
+    const skyMats = [0x8d8f94, 0x9c9a92, 0x7f8790].map((col) => mat(new THREE.Color(col).lerp(new THREE.Color(theme.sky), 0.4).getHex())); // pâlies : elles sont loin
+    for (let i = 0; i < sk.n; i++) {
+      const w = 10 + r3() * 16, d = 10 + r3() * 16, hh = 22 + r3() * 50;
+      const x = sk.x0 + r3() * (sk.x1 - sk.x0), z = sk.z0 + r3() * (sk.z1 - sk.z0);
+      add(new THREE.BoxGeometry(w, hh, d), skyMats[i % skyMats.length], x, hh / 2, z, false);
+      if (r3() < 0.4) add(new THREE.CylinderGeometry(0.2, 0.2, 10, 4), skyMats[0], x, hh + 5, z, false);
+    }
   }
 
   // Course : piste, points de passage, tremplins, obstacles mobiles
@@ -247,6 +292,23 @@ export function createMapModel(map) {
   };
 
   return { group, objects, bushes, zone, race };
+}
+
+// Teinte du sol par régions (map.paint = [{ x0, x1, z0, z1, soft, hsl }], borne absente = infinie) :
+// le sable vire au bitume, etc. Modifie `color` et renvoie le poids de la peinture (0..1).
+function paintGround(map, color, x, z, rand) {
+  if (!map.paint) return 0;
+  let wMax = 0;
+  for (const p of map.paint) {
+    const s = p.soft ?? 10;
+    const ramp = (v, a, b) => Math.min(a === undefined ? 1 : (v - a) / s + 0.5, b === undefined ? 1 : (b - v) / s + 0.5);
+    const w = Math.max(0, Math.min(1, ramp(x, p.x0, p.x1), ramp(z, p.z0, p.z1)));
+    if (w <= 0) continue;
+    const target = new THREE.Color().setHSL(p.hsl[0] + rand() * 0.02, p.hsl[1] + rand() * 0.03, p.hsl[2] + rand() * 0.05);
+    color.lerp(target, w);
+    wMax = Math.max(wMax, w);
+  }
+  return wMax;
 }
 
 // Buissons : touffes de feuillage sans collision (shared/props.js : bush). Un char peut s'y cacher ;

@@ -16,6 +16,8 @@ const PLAN_COLORS = {
   water: 'rgba(80, 150, 200, 0.75)', pipe: 'rgba(200, 120, 60, 0.9)', mesa: 'rgba(170, 120, 80, 0.85)',
   hedgehog: 'rgba(90, 92, 96, 0.9)', column: 'rgba(225, 205, 160, 0.9)', ruin: 'rgba(225, 205, 160, 0.8)',
   bridge: 'rgba(150, 110, 70, 0.8)', road: 'rgba(200, 190, 160, 0.18)', bush: 'rgba(70, 140, 70, 0.55)',
+  tower: 'rgba(170, 176, 182, 0.95)', adobe: 'rgba(205, 165, 112, 0.95)', minaret: 'rgba(80, 165, 158, 0.95)',
+  wreck: 'rgba(120, 100, 90, 0.85)', bus: 'rgba(200, 180, 120, 0.85)', sandbag: 'rgba(176, 155, 108, 0.85)', hulk: 'rgba(70, 64, 60, 0.9)',
 };
 
 // Dessine le plan d'une carte (obstacles) dans un canvas. Sert à la mini-carte et à l'aperçu du salon.
@@ -27,11 +29,14 @@ export function drawMapPlan(canvas, map, maxSize) {
   g.translate(canvas.width / 2, canvas.height / 2);
   g.scale(scale, scale);
   // relief : pied de la colline (pente) et sommet plat, en deux teintes
+  // (creux : oued, tranchée, en teintes sombres ; ellipses tournées pour les crêtes de dunes)
   for (const o of map.hills ?? []) {
-    for (const [rx, rz, color] of [[o.rx, o.rz, 'rgba(150, 125, 85, 0.35)'], [o.ix, o.iz, 'rgba(190, 160, 105, 0.45)']]) {
+    const tones = o.h < 0 ? ['rgba(40, 30, 20, 0.25)', 'rgba(30, 22, 14, 0.35)'] : ['rgba(150, 125, 85, 0.35)', 'rgba(190, 160, 105, 0.45)'];
+    const rot = o.sa ? Math.atan2(o.sa, o.ca) : 0;
+    for (const [rx, rz, color] of [[o.rx, o.rz, tones[0]], [o.ix, o.iz, tones[1]]]) {
       g.fillStyle = color;
       g.beginPath();
-      g.ellipse(o.x, o.z, rx, rz, 0, 0, Math.PI * 2);
+      g.ellipse(o.x, o.z, rx, rz, rot, 0, Math.PI * 2);
       g.fill();
     }
   }

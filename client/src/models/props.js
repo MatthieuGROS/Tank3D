@@ -37,6 +37,19 @@ export function propBuilders({ theme, group, mat, add, snowMat, concreteMat, tri
     palmTrunk: mat(0x8a6a45),
     palmLeaf: mat(snowy ? theme.leaf[0] : 0x5a8f3a),
     slit: mat(0x1f2124),
+    adobe: [mat(0xc9a170), mat(0xd4b083), mat(0xb98f60)],
+    adobeDark: mat(0xa27a4c),
+    dome: mat(0x3f8f8a),
+    gold: mat(0xd8b24a),
+    tower: [mat(0xcfc6b4), mat(0xb7b2a6), mat(0xa9b3b8), mat(0xd8c3a0), mat(0x9fa6a0)],
+    glass: mat(0x2e3a44),
+    burnt: mat(0x2f2a27),
+    scorched: mat(0x4a3b30),
+    tire: mat(0x1c1c1e),
+    car: [mat(0x7a3a2c), mat(0x8a7b5c), mat(0x40566a), mat(0x3b3430)],
+    busBody: [mat(0xd8c9a0), mat(0x5f7d8c)],
+    sand: [mat(0xb09b6c), mat(0x9f8a5e)],
+    dash: mat(0xe8e2c8),
   };
 
   // Poutre entre deux points (cylindre orienté).
@@ -159,7 +172,152 @@ export function propBuilders({ theme, group, mat, add, snowMat, concreteMat, tri
       }
     },
 
+    // Immeuble : bandeaux de fenêtres sombres à chaque étage, vitrines au rez-de-chaussée, toit technique.
+    tower(b) {
+      const r = rng(seedOf(b));
+      add(new THREE.BoxGeometry(b.w, b.h, b.d), M.tower[Math.floor(r() * M.tower.length)], b.x, b.h / 2, b.z);
+      add(new THREE.BoxGeometry(b.w + 0.08, 2.2, b.d + 0.08), M.glass, b.x, 1.5, b.z, false);
+      for (let y = 4.4; y < b.h - 1.4; y += 3.2) add(new THREE.BoxGeometry(b.w + 0.06, 1.1, b.d + 0.06), M.glass, b.x, y, b.z, false);
+      add(new THREE.BoxGeometry(b.w + 0.4, 0.5, b.d + 0.4), snowy ? snowMat : trimMat, b.x, b.h + 0.25, b.z);
+      add(new THREE.BoxGeometry(2.2, 1.8, 2.2), trimMat, b.x - b.w / 5, b.h + 1.1, b.z + b.d / 5);
+      if (r() < 0.6) add(new THREE.CylinderGeometry(0.9, 0.9, 1.6, 8), M.steel, b.x + b.w / 5, b.h + 1.3, b.z - b.d / 5);
+      else add(new THREE.CylinderGeometry(0.07, 0.07, 5, 4), M.steel, b.x + b.w / 4, b.h + 2.7, b.z - b.d / 4, false);
+    },
+
+    // Maison de terre : créneaux, porte et petites fenêtres sombres, poutres de bois en saillie.
+    adobe(b) {
+      const r = rng(seedOf(b));
+      const wallM = M.adobe[Math.floor(r() * M.adobe.length)];
+      add(new THREE.BoxGeometry(b.w, b.h, b.d), wallM, b.x, b.h / 2, b.z);
+      add(new THREE.BoxGeometry(b.w + 0.2, 0.25, b.d + 0.2), M.adobeDark, b.x, b.h - 0.1, b.z, false);
+      // créneaux le long des quatre bords
+      for (const [len, along] of [[b.w, true], [b.d, false]]) {
+        const n = Math.max(3, Math.round(len / 1.3) | 1);
+        for (let i = 0; i < n; i += 2) {
+          const t = -len / 2 + ((i + 0.5) * len) / n;
+          for (const s of [-1, 1]) {
+            const x = along ? b.x + t : b.x + s * (b.w / 2 - 0.25), z = along ? b.z + s * (b.d / 2 - 0.25) : b.z + t;
+            add(new THREE.BoxGeometry(along ? len / n : 0.5, 0.7, along ? 0.5 : len / n), wallM, x, b.h + 0.35, z, false);
+          }
+        }
+      }
+      // porte sur une grande face, fenêtres sur les deux
+      const long = b.w >= b.d, face = long ? b.d / 2 : b.w / 2, len = long ? b.w : b.d;
+      const at = (t, y, s, w, h) => add(new THREE.BoxGeometry(long ? w : 0.1, h, long ? 0.1 : w), M.slit,
+        long ? b.x + t : b.x + s * (face + 0.03), y, long ? b.z + s * (face + 0.03) : b.z + t, false);
+      at((r() - 0.5) * len * 0.5, 1.1, r() < 0.5 ? -1 : 1, 1.4, 2.2);
+      for (const s of [-1, 1]) for (const t of [-len / 3, len / 3]) if (b.h > 4) at(t, b.h * 0.68, s, 0.7, 0.75);
+      // poutres en saillie
+      for (let i = 0; i < Math.round(len / 2.5); i++) {
+        const t = -len / 2 + 1 + i * 2.5, s = i % 2 ? 1 : -1;
+        const beam = add(new THREE.CylinderGeometry(0.1, 0.1, 0.9, 4), M.plankDark,
+          long ? b.x + t : b.x + s * (face + 0.3), b.h - 0.9, long ? b.z + s * (face + 0.3) : b.z + t, false);
+        beam.rotation[long ? 'x' : 'z'] = Math.PI / 2;
+      }
+    },
+
+    // Sacs de sable : deux rangs empilés et un rang de couronnement. Bas : les obus passent au-dessus.
+    sandbag(b) {
+      const r = rng(seedOf(b));
+      const along = b.w >= b.d, len = along ? b.w : b.d, wid = along ? b.d : b.w;
+      const n = Math.max(2, Math.round(len / 1.1));
+      for (let row = 0; row < 3; row++) {
+        const y = 0.22 + row * 0.42, k = row === 2 ? 0.6 : 1;
+        for (let i = 0; i < n - (row % 2); i++) {
+          const t = -len / 2 + ((i + 0.5 + (row % 2) * 0.5) * len) / n;
+          const bag = add(new THREE.BoxGeometry(along ? len / n + 0.05 : wid * k, 0.42, along ? wid * k : len / n + 0.05),
+            M.sand[(i + row) % 2], along ? b.x + t : b.x, y, along ? b.z : b.z + t, row === 0);
+          bag.rotation.y = (r() - 0.5) * 0.12;
+        }
+      }
+    },
+
+    // Épave de voiture : caisse, habitacle, roues ; brûlée une fois sur deux.
+    wreck(b) {
+      const r = rng(seedOf(b));
+      const along = b.d > b.w, L = Math.max(b.w, b.d), W = Math.min(b.w, b.d);
+      const body = r() < 0.5 ? M.burnt : M.car[Math.floor(r() * M.car.length)];
+      const box = (w, h, l, y, m, off = 0, shadow = true) =>
+        add(new THREE.BoxGeometry(along ? w : l, h, along ? l : w), m, along ? b.x : b.x + off, y, along ? b.z + off : b.z, shadow);
+      box(W, 0.6, L, 0.62, body);
+      box(W * 0.86, 0.5, L * 0.48, 1.15, body === M.burnt ? M.scorched : M.glass, -L * 0.05);
+      for (const sa of [-1, 1]) {
+        for (const sl of [-1, 1]) {
+          const wh = add(new THREE.CylinderGeometry(0.36, 0.36, 0.28, 8), M.tire,
+            along ? b.x + sa * W * 0.45 : b.x + sl * L * 0.32, 0.36, along ? b.z + sl * L * 0.32 : b.z + sa * W * 0.45, false);
+          wh.rotation[along ? 'z' : 'x'] = Math.PI / 2;
+        }
+      }
+    },
+
+    // Bus abandonné : caisse haute, bandeau de vitres, roues.
+    bus(b) {
+      const r = rng(seedOf(b));
+      const along = b.d > b.w, L = Math.max(b.w, b.d), W = Math.min(b.w, b.d);
+      const body = M.busBody[Math.floor(r() * M.busBody.length)];
+      add(new THREE.BoxGeometry(b.w, b.h - 0.5, b.d), body, b.x, 0.5 + (b.h - 0.5) / 2, b.z);
+      add(new THREE.BoxGeometry(b.w + 0.06, 0.9, b.d + 0.06), M.glass, b.x, b.h - 1.0, b.z, false);
+      add(new THREE.BoxGeometry(b.w + 0.1, 0.12, b.d + 0.1), trimMat, b.x, b.h, b.z, false);
+      for (const sa of [-1, 1]) {
+        for (const sl of [-0.33, 0.33]) {
+          const wh = add(new THREE.CylinderGeometry(0.5, 0.5, 0.3, 8), M.tire,
+            along ? b.x + sa * W * 0.48 : b.x + sl * L, 0.5, along ? b.z + sl * L : b.z + sa * W * 0.48, false);
+          wh.rotation[along ? 'z' : 'x'] = Math.PI / 2;
+        }
+      }
+    },
+
     // ------------------------------------------------------------- disques
+    // Minaret : fût octogonal, balcon, lanterne, coupole et flèche dorée.
+    minaret(o) {
+      const R = o.r, h1 = o.h * 0.68, h2 = o.h * 0.17;
+      add(new THREE.CylinderGeometry(R * 1.25, R * 1.35, 1.2, 8), M.adobeDark, o.x, 0.6, o.z);
+      add(new THREE.CylinderGeometry(R * 0.95, R, h1, 8), M.adobe[1], o.x, h1 / 2, o.z);
+      add(new THREE.CylinderGeometry(R * 1.35, R * 0.95, 0.7, 8), M.adobeDark, o.x, h1 + 0.35, o.z);
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        add(new THREE.BoxGeometry(0.25, 0.9, 0.25), M.adobeDark, o.x + Math.cos(a) * R * 1.25, h1 + 1.15, o.z + Math.sin(a) * R * 1.25, false);
+      }
+      add(new THREE.CylinderGeometry(R * 0.68, R * 0.72, h2, 8), M.adobe[0], o.x, h1 + 0.7 + h2 / 2, o.z);
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + Math.PI / 8;
+        add(new THREE.BoxGeometry(0.5, 1.2, 0.5), M.slit, o.x + Math.cos(a) * R * 0.62, h1 + 0.7 + h2 * 0.55, o.z + Math.sin(a) * R * 0.62, false);
+      }
+      const top = h1 + 0.7 + h2;
+      add(new THREE.SphereGeometry(R * 0.78, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), snowy ? snowMat : M.dome, o.x, top, o.z);
+      add(new THREE.CylinderGeometry(0.06, 0.12, 1.8, 5), M.gold, o.x, top + R * 0.78 + 0.8, o.z, false);
+      add(new THREE.SphereGeometry(0.22, 6, 4), M.gold, o.x, top + R * 0.78 + 0.5, o.z, false);
+    },
+
+    // Carcasse de char calcinée : caisse, chenilles, tourelle de travers, canon tombant.
+    hulk(o) {
+      const r = rng(seedOf(o));
+      const g = new THREE.Group();
+      const part = (geo, m, x, y, z) => {
+        const mesh = new THREE.Mesh(geo, m);
+        mesh.position.set(x, y, z);
+        mesh.castShadow = mesh.receiveShadow = true;
+        g.add(mesh);
+        return mesh;
+      };
+      part(new THREE.BoxGeometry(2.4, 0.9, 4.2), M.burnt, 0, 0.85, 0);
+      for (const s of [-1, 1]) part(new THREE.BoxGeometry(0.7, 0.85, 4.5), M.tire, s * 1.4, 0.45, 0);
+      const turret = new THREE.Group();
+      turret.position.set(0, 1.3, -0.3);
+      turret.rotation.set((r() - 0.5) * 0.25, r() * 6, (r() - 0.5) * 0.3);
+      const t1 = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.75, 2), M.scorched);
+      t1.position.y = 0.37;
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 3.2, 6), M.burnt);
+      barrel.rotation.x = Math.PI / 2 + 0.25 + r() * 0.2;
+      barrel.position.set(0, 0.25, 2.3);
+      for (const m of [t1, barrel]) m.castShadow = true;
+      turret.add(t1, barrel);
+      g.add(turret);
+      g.position.set(o.x, -0.15, o.z); // un peu enfoncée dans le sable
+      g.rotation.set((r() - 0.5) * 0.1, r() * 6, (r() - 0.5) * 0.12);
+      group.add(g);
+    },
+
     // Palmier : tronc incliné en segments, palmes retombantes.
     palm(o) {
       const r = rng(seedOf(o));
@@ -205,7 +363,13 @@ export function propBuilders({ theme, group, mat, add, snowMat, concreteMat, tri
 
     // ------------------------------------------------------------- à plat
     road(f) {
-      add(new THREE.BoxGeometry(f.w, 0.03, f.d), M.road, f.x, 0.04, f.z, false);
+      add(new THREE.BoxGeometry(f.w, 0.03, f.d), f.color !== undefined ? mat(f.color) : M.road, f.x, 0.04, f.z, false);
+      if (!f.dash) return;
+      // ligne médiane en tirets le long du grand côté
+      const along = f.w >= f.d, len = along ? f.w : f.d;
+      for (let t = -len / 2 + 2; t < len / 2 - 1; t += 6) {
+        add(new THREE.BoxGeometry(along ? 3 : 0.3, 0.02, along ? 0.3 : 3), M.dash, along ? f.x + t + 1.5 : f.x, 0.065, along ? f.z : f.z + t + 1.5, false);
+      }
     },
 
     // Pont : tablier de planches, longerons, garde-corps sur les deux rives du passage.

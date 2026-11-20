@@ -22,7 +22,16 @@ export const ruin = (x, z, w, d, h = 3) => ({ kind: 'ruin', x, z, w, d, h }); //
 export const mesa = (x, z, w, d, h = 11) => ({ kind: 'mesa', x, z, w, d, h }); // plateau rocheux en strates
 export const derrick = (x, z) => ({ kind: 'derrick', x, z, w: 4.4, d: 4.4, h: 14 }); // derrick pétrolier
 export const water = (x, z, w, d) => ({ kind: 'water', x, z, w, d, h: 0.2 }); // les obus passent au-dessus
+// ville et kasbah
+export const tower = (x, z, w, d, h = 16) => ({ kind: 'tower', x, z, w, d, h }); // immeuble à bandeaux de fenêtres
+export const adobe = (x, z, w, d, h = 5) => ({ kind: 'adobe', x, z, w, d, h }); // maison de terre crénelée
+export const sandbag = (x, z, w, d) => ({ kind: 'sandbag', x, z, w, d, h: 1.3 }); // sacs de sable : bas, les obus passent
+// épaves orientées le long de Z (axis 'z') ou de X : basses pour la voiture (les obus passent), hautes pour le bus
+export const wreck = (x, z, axis = 'z') => ({ kind: 'wreck', x, z, w: axis === 'z' ? 2.2 : 4.4, d: axis === 'z' ? 4.4 : 2.2, h: 1.4 });
+export const bus = (x, z, axis = 'z') => ({ kind: 'bus', x, z, w: axis === 'z' ? 2.8 : 10, d: axis === 'z' ? 10 : 2.8, h: 3.2 });
 // disques
+export const minaret = (x, z, r = 2.2, h = 20) => ({ kind: 'minaret', x, z, r, h });
+export const hulk = (x, z) => ({ kind: 'hulk', x, z, r: 2.3, h: 2.2 }); // carcasse de char calcinée
 export const rock = (x, z, r = 2.5) => ({ kind: 'rock', x, z, r, h: r * 1.3 });
 export const tree = (x, z) => ({ kind: 'tree', x, z, r: 0.6, h: 6 }); // seul le tronc bloque
 export const dune = (x, z, r = 7) => ({ kind: 'dune', x, z, r, h: 2.8 });
@@ -31,9 +40,22 @@ export const column = (x, z, h = 5.5) => ({ kind: 'column', x, z, r: 0.95, h });
 export const hedgehog = (x, z) => ({ kind: 'hedgehog', x, z, r: 1.1, h: 1.1 }); // hérisson antichar, bas
 export const pond = (x, z, r = 5) => ({ kind: 'water', x, z, r, h: 0.2 });
 // à plat (visuel)
-export const road = (x, z, w, d) => ({ kind: 'road', flat: true, x, z, w, d });
+export const road = (x, z, w, d, color) => ({ kind: 'road', flat: true, x, z, w, d, ...(color ? { color } : {}) });
+export const street = (x, z, w, d) => ({ kind: 'road', flat: true, x, z, w, d, color: 0x4a4a4c, dash: true }); // asphalte, ligne médiane
 export const bush = (x, z, w, d) => ({ kind: 'bush', flat: true, x, z, w, d }); // buisson : sans collision, cache les chars qui y entrent
 export const bridge = (x, z, w, d, axis = 'x') => ({ kind: 'bridge', flat: true, x, z, w, d, axis }); // axis : sens du tablier
+
+// ------------------------------------------------------------------ relief (map.hills, voir shared/map.js : groundAt)
+// Colline : ellipse extérieure (rx, rz) = pied, ellipse intérieure (ix, iz) = sommet plat à la hauteur h.
+// h < 0 : creux (oued, tranchée) au fond plat. `a` : rotation de l'ellipse en radians (crêtes de dunes en biais).
+export function hill(x, z, rx, rz, ix, iz, h, a = 0) {
+  return a ? { x, z, rx, rz, ix, iz, h, ca: Math.cos(a), sa: Math.sin(a) } : { x, z, rx, rz, ix, iz, h };
+}
+
+// Symétrie nord-sud du relief : (x, z) -> (x, -z), l'orientation s'inverse. Les reliefs posés sur l'axe ne sont pas doublés.
+export function mirrorHillsZ(list) {
+  return list.flatMap((o) => (o.z === 0 ? [o] : [o, { ...o, z: -o.z, ...(o.sa ? { sa: -o.sa } : {}) }]));
+}
 
 // ------------------------------------------------------------------ groupes d'objets
 

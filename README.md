@@ -170,6 +170,7 @@ L'hôte choisit la carte, chaque joueur choisit son char.
 | Avant-poste (prairie) | village fortifié, zone centrale couverte par deux murets |
 | Oasis (désert) | plateaux rocheux en hélice ; les **pipelines** et les mares arrêtent les chars mais pas les obus |
 | Deux-Rives (neige) | une île entre deux bras de fleuve : on ne passe que par **4 ponts**, mais on tire par-dessus l'eau |
+| La Kasbah (désert · ville) | très grande carte : dunes et **oued** à l'ouest, ville et **voie express en tranchée** à l'est ; grande zone sur le plateau de la kasbah, autour du minaret |
 
 ## Crédits, Store et expérience
 
@@ -235,7 +236,7 @@ Tous les barèmes se règlent dans `shared/progress.js`, les prix dans `TANK_TYP
 shared/     code commun serveur + client
   constants.js   réglages du jeu : chars, unités de campagne, bonus, difficultés…
   map.js         liste des cartes d'escarmouche (MAPS) + collisions
-  maps/          cartes composées avec la bibliothèque de décor (oasis.js, rives.js)
+  maps/          cartes composées avec la bibliothèque de décor (oasis.js, rives.js, kasbah.js…)
   props.js       bibliothèque de décor : maisons, rochers, eau, ponts, pipelines… + groupes et symétrie
   skins.js       skins des chars et leurs conditions de déblocage
   progress.js    expérience et grades, crédits (barèmes), chars possédés

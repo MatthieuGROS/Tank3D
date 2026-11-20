@@ -10,6 +10,7 @@ import { RIVES } from './maps/rives.js';
 import { COLLINE } from './maps/colline.js';
 import { COURSE_COLLINE } from './maps/course_colline.js';
 import { COURSE_NEON } from './maps/course_neon.js';
+import { KASBAH } from './maps/kasbah.js';
 import { rampHeight, floorHeight } from './race.js';
 
 // Symétrie centrale : chaque obstacle est dupliqué en (-x, -z) pour une carte équitable.
@@ -54,7 +55,7 @@ const OUTPOST = {
   },
 };
 
-export const MAPS = { outpost: OUTPOST, oasis: OASIS, rives: RIVES, colline: COLLINE };
+export const MAPS = { outpost: OUTPOST, oasis: OASIS, rives: RIVES, colline: COLLINE, kasbah: KASBAH };
 export const DEFAULT_MAP = 'outpost';
 // Circuits du mode course : cartes à part, jamais proposées en escarmouche.
 export const RACE_MAPS = { colline: COURSE_COLLINE, neon: COURSE_NEON };
@@ -65,7 +66,7 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 // ------------------------------------------------------------ décor destructible
 // Objets qu'un obus peut détruire, avec leurs points de structure. Les autres (bâtiments, rochers,
 // plateaux, eau, dunes, bunkers, pipelines…) sont indestructibles.
-export const DESTRUCTIBLE = { crate: 600, tree: 350, palm: 350, hedgehog: 900, column: 1100, wall: 1400, ruin: 1600 };
+export const DESTRUCTIBLE = { crate: 600, tree: 350, palm: 350, hedgehog: 900, column: 1100, wall: 1400, ruin: 1600, wreck: 500, bus: 900, sandbag: 800 };
 
 // Identifiant stable d'un objet de la carte d'origine : 'b3' (4e boîte) ou 'c7' (8e disque).
 export function objectKey(baseMap, o) {
@@ -169,9 +170,16 @@ export function groundAt(x, z, map) {
   if (map.race?.floor) return floorHeight(map.race, x, z); // circuit au-dessus du vide : montées et descentes
   const hills = map.hills;
   if (!hills) return 0;
-  let best = 0;
+  let best = 0, low = 0;
   for (const o of hills) {
-    const ux = x - o.x, uz = z - o.z;
+    let ux = x - o.x, uz = z - o.z;
+    const R = o.rx > o.rz ? o.rx : o.rz;
+    if (ux > R || ux < -R || uz > R || uz < -R) continue; // rejet rapide
+    if (o.sa) { // ellipse tournée (shared/props.js : hill)
+      const u = ux * o.ca + uz * o.sa;
+      uz = uz * o.ca - ux * o.sa;
+      ux = u;
+    }
     const dO = Math.sqrt((ux / o.rx) ** 2 + (uz / o.rz) ** 2);
     if (dO >= 1) continue;
     const dI = Math.sqrt((ux / o.ix) ** 2 + (uz / o.iz) ** 2);
@@ -179,9 +187,38 @@ export function groundAt(x, z, map) {
     if (dI > 1) t = ((1 - dO) * dI) / (dI - dO); // 1 au bord du sommet, 0 au pied
     const h = o.h * t * t * (3 - 2 * t);
     if (h > best) best = h;
+    else if (h < low) low = h; // creux (h < 0) : oued, tranchée
   }
-  return best;
+  return best + low;
 }
+
+// Carte à relief : chaque objet est posé sur le sol. `base` = altitude du sol sous l'objet (le point le plus
+// bas de son emprise, pour qu'il ne flotte jamais) et `h` devient l'altitude absolue de son sommet : les
+// collisions, les obus et les lignes de vue n'ont rien à savoir de plus. Le rendu décale l'objet de `base`.
+// Les buissons suivent déjà le sol touffe par touffe : on ne les touche pas.
+function settle(map) {
+  if (!map.hills || map.settled) return map;
+  map.settled = true;
+  const lowest = (o) => {
+    const ex = o.r ?? o.w / 2, ez = o.r ?? o.d / 2;
+    let m = groundAt(o.x, o.z, map);
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]]) m = Math.min(m, groundAt(o.x + sx * ex, o.z + sz * ez, map));
+    return Math.round(m * 100) / 100;
+  };
+  for (const o of [...map.boxes, ...map.circles]) {
+    const base = lowest(o);
+    if (Math.abs(base) < 0.02) continue;
+    o.base = base;
+    o.h += base;
+  }
+  for (const f of map.flats ?? []) {
+    if (f.kind === 'bush') continue;
+    const base = Math.round(groundAt(f.x, f.z, map) * 100) / 100;
+    if (Math.abs(base) >= 0.02) f.base = base;
+  }
+  return map;
+}
+for (const m of Object.values(MAPS)) settle(m);
 
 // Pente du sol (montée / distance) dans la direction (fx, fz) unitaire.
 export function slopeAlong(x, z, fx, fz, map) {

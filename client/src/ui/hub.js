@@ -259,7 +259,7 @@ export class Hub {
       drawMapPreview(canvas, map, 300);
       art.append(canvas);
       const row = el('div', 'mc-info');
-      row.append(el('b', '', map.name), el('small', '', themeOf(map).name));
+      row.append(el('b', '', map.name), el('small', '', map.themeName ?? themeOf(map).name));
       card.append(art, row);
       card.addEventListener('click', () => {
         if (this.isHost && !this.running) this.net.send({ type: 'settings', map: key });
