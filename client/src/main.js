@@ -571,7 +571,20 @@ net.on('account', (msg) => {
       hud.toast(`Skin débloqué : ${SKINS[id].name}`, 'green');
     }
   }
-  game.account = { name: msg.name, cleared: msg.cleared, xp: msg.xp ?? 0, credits: msg.credits ?? 0, tanks: msg.tanks ?? [] };
+  game.account = {
+    name: msg.name, cleared: msg.cleared, xp: msg.xp ?? 0, credits: msg.credits ?? 0, tanks: msg.tanks ?? [],
+    equip: { stock: msg.equip?.stock ?? {}, load: msg.equip?.load ?? {} }, // équipements : stock + montage par char
+  };
+  refreshUI();
+});
+// Équipements : achat, fusion, montage (le message d'erreur ou de réussite s'affiche dans le hub)
+net.on('equipDone', (msg) => {
+  hub.onEquipDone(msg);
+  sfx.beep(true);
+  refreshUI();
+});
+net.on('equipError', (msg) => {
+  hub.onEquipError(msg);
   refreshUI();
 });
 // Récompenses de fin de partie ou de mission (XP + crédits, éventuelle promotion)

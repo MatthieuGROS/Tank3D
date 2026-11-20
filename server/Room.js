@@ -21,6 +21,7 @@ import { RaceBrain } from './RaceBot.js';
 import { Campaign, isUnlocked } from './Campaign.js';
 import { Accounts } from './Accounts.js';
 import { SKINS, DEFAULT_SKIN, skinUnlocked } from '../shared/skins.js';
+import { EQUIPMENT, EQUIP_PRICE, eqDef, parseEq, cleanLoadout } from '../shared/equipment.js';
 
 const BOT_NAMES = ['Sgt Morel', 'Cpl Vasseur', 'Lt Garnier', 'Adj Roche', 'Sgt Kessel', 'Cpl Dumas', 'Lt Brandt', 'Adj Ferrand',
   'Sgt Lorca', 'Cpl Niel', 'Lt Arago', 'Adj Colin', 'Sgt Verne', 'Cpl Malot', 'Lt Hugo', 'Adj Bazin'];
@@ -100,8 +101,9 @@ export class Room {
     return this.navs.get(key);
   }
 
+  // Fiche du char en jeu : pour un joueur, celle de son char avec les équipements montés au début de la manche.
   defOf(p) {
-    return UNIT_TYPES[p.activeType] ?? TANK_TYPES[DEFAULT_TANK];
+    return p.def ?? UNIT_TYPES[p.activeType] ?? TANK_TYPES[DEFAULT_TANK];
   }
 
   humans() {
@@ -292,10 +294,50 @@ export class Room {
   sendAccount(p) {
     if (!p.account) return;
     const pr = p.account.progress;
+    const { stock, load } = this.accounts.equipOf(p.account);
     this.send(p, {
       type: 'account', name: p.account.name, cleared: pr.cleared, xp: pr.xp ?? 0,
-      credits: pr.credits ?? 0, tanks: ownedTanks(pr, ALL_TANKS),
+      credits: pr.credits ?? 0, tanks: ownedTanks(pr, ALL_TANKS), equip: { stock, load },
     });
+  }
+
+  // Équipements montés sur le char du joueur, figés pour la manche (vides en course et pour les bots).
+  loadoutOf(p) {
+    if (p.bot || !p.account || this.isRace) return [];
+    return cleanLoadout(p.type, this.accounts.equipOf(p.account).load[p.type]);
+  }
+
+  // Achat, fusion, montage et démontage d'équipements. Les changements s'appliquent à la prochaine manche.
+  onEquip(p, msg) {
+    if (!p.account || !this.allow(p, 'equipAt', 120)) return;
+    const a = this.accounts, id = msg.id, tank = msg.tank, key = msg.key;
+    const named = (k) => EQUIPMENT[parseEq(k)?.id]?.name ?? '';
+    let error = null, text = '';
+    switch (msg.type) {
+      case 'buyEquip':
+        error = a.buyEquip(p.account, id, EQUIP_PRICE);
+        text = `${EQUIPMENT[id]?.name} ajouté à ton stock.`;
+        if (!error) console.log(`  $ ${p.name} achète : ${EQUIPMENT[id].name} (${fmtCr(EQUIP_PRICE)})`);
+        break;
+      case 'mergeEquip':
+        error = Object.hasOwn(EQUIPMENT, id) && Number.isInteger(msg.level) ? a.mergeEquip(p.account, id, msg.level, tank) : 'Équipement inconnu.';
+        text = `${EQUIPMENT[id]?.name} : niveau ${msg.level + 1} obtenu.`;
+        break;
+      case 'equip':
+        error = this.canUseTank(p, tank) ? a.equip(p.account, tank, key) : 'Ce char n’est pas dans ton hangar.';
+        text = `${named(key)} monté sur le ${TANK_TYPES[tank]?.name}.`;
+        break;
+      case 'unequip':
+        error = Object.hasOwn(TANK_TYPES, tank) ? a.unequip(p.account, tank, key) : 'Char inconnu.';
+        text = `${named(key)} remis en stock.`;
+        break;
+    }
+    if (error) {
+      this.send(p, { type: 'equipError', error });
+      return;
+    }
+    this.send(p, { type: 'equipDone', op: msg.type, id: id ?? parseEq(key)?.id, text });
+    this.sendAccount(p);
   }
 
   canUseTank(p, type) {
@@ -523,6 +565,12 @@ export class Room {
         this.stateDirty = true;
         break;
       }
+      case 'buyEquip':
+      case 'mergeEquip':
+      case 'equip':
+      case 'unequip':
+        this.onEquip(p, msg);
+        break;
       case 'skin':
         // skin débloqué par son compte uniquement ; mémorisé pour les prochaines connexions
         if (typeof msg.skin === 'string' && Object.hasOwn(SKINS, msg.skin) && msg.skin !== p.skin && skinUnlocked(msg.skin, p.account?.progress.cleared)) {
@@ -634,7 +682,7 @@ export class Room {
       report: this.report,
       players: [...this.players.values()].map((p) => ({
         id: p.id, name: p.name, team: p.team, type: p.type, skin: p.skin, bot: p.bot, unit: p.unit || undefined, obj: p.obj || undefined,
-        kills: p.kills, deaths: p.deaths, im: p.inMatch || undefined,
+        kills: p.kills, deaths: p.deaths, im: p.inMatch || undefined, eq: p.eq?.length ? p.eq : undefined, // équipements montés pour la manche
         rk: p.account ? rankIndex(p.account.progress.xp ?? 0) : undefined, // grade
       })),
     });
@@ -748,7 +796,9 @@ export class Room {
   enterRound(p, x, z, yaw) {
     p.tank = createTankState(x, z, yaw);
     p.activeType = p.type; // le char reste le même pendant toute la manche
-    p.maxHp = TANK_TYPES[p.type].maxHp;
+    p.eq = this.loadoutOf(p); // ses équipements aussi : figés jusqu'à la prochaine manche
+    p.def = eqDef(p.type, p.eq);
+    p.maxHp = p.def.maxHp;
     p.hp = p.maxHp;
     p.alive = true;
     p.inRound = true;

@@ -3,14 +3,17 @@
 // Un compte n'accepte qu'une connexion à la fois.
 //
 // Format du fichier :
-//   { "accounts": { "<pseudo en minuscules>": { name, salt, hash, created, progress: { cleared: { m1: 3, ... }, skin, tank, xp, credits, tanks } } } }
+//   { "accounts": { "<pseudo en minuscules>": { name, salt, hash, created, progress: { cleared: { m1: 3, ... }, skin, tank, xp, credits, tanks, equip } } } }
 // `cleared[mission]` = difficulté la plus élevée réussie : 1 Recrue, 2 Vétéran, 3 Élite (= nombre d'étoiles).
 // `skin` / `tank` = derniers skin et char choisis (voir shared/skins.js, shared/constants.js).
 // `xp` = expérience totale (grade) ; `credits` = solde ; `tanks` = chars achetés au Store (shared/progress.js).
+// `equip` = équipements : { stock: { 'id:niveau': quantité }, load: { <char>: ['id:niveau', ...] } } (shared/equipment.js).
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { TANK_TYPES } from '../shared/constants.js';
+import { EQUIPMENT, EQUIP_SLOTS, EQUIP_MAX_LEVEL, MERGE_COST, eqKey, parseEq, equipMisfit, cleanLoadout } from '../shared/equipment.js';
 
 const FILE = process.env.TANK3D_ACCOUNTS_FILE || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'accounts.json');
 
@@ -104,6 +107,83 @@ export class Accounts {
     if ((pr.credits ?? 0) < price) return 'Crédits insuffisants.';
     pr.credits -= price;
     pr.tanks = [...(pr.tanks ?? []), type];
+    this.save();
+    return null;
+  }
+
+  // ------------------------------------------------------------ équipements (shared/equipment.js)
+  // Chaque opération renvoie un message d'erreur, ou null si elle est faite. Un exemplaire est soit en
+  // stock (progress.equip.stock), soit monté sur un char (progress.equip.load[char]).
+
+  equipOf(account) {
+    const pr = account.progress;
+    pr.equip ??= {};
+    pr.equip.stock ??= {};
+    pr.equip.load ??= {};
+    return pr.equip;
+  }
+
+  // Achat d'un équipement de niveau 1 (prix fixe).
+  buyEquip(account, id, price) {
+    if (!Object.hasOwn(EQUIPMENT, id)) return 'Équipement inconnu.';
+    const pr = account.progress;
+    if ((pr.credits ?? 0) < price) return 'Crédits insuffisants.';
+    const stock = this.equipOf(account).stock, key = eqKey(id, 1);
+    pr.credits -= price;
+    stock[key] = (stock[key] ?? 0) + 1;
+    this.save();
+    return null;
+  }
+
+  // Fusion : MERGE_COST exemplaires du niveau `level` donnent un exemplaire du niveau suivant.
+  // On puise dans le stock ; s'il n'y en a qu'un, l'exemplaire monté sur le char `tank` complète
+  // (le char garde alors son emplacement, à son nouveau niveau).
+  mergeEquip(account, id, level, tank) {
+    const e = parseEq(eqKey(id, level));
+    if (!e || level >= EQUIP_MAX_LEVEL) return 'Cet équipement est déjà au niveau maximal.';
+    const { stock, load } = this.equipOf(account);
+    const key = eqKey(id, level), next = eqKey(id, level + 1);
+    const inStock = stock[key] ?? 0;
+    const slot = load[tank]?.indexOf(key) ?? -1;
+    if (inStock >= MERGE_COST) {
+      stock[key] -= MERGE_COST;
+      stock[next] = (stock[next] ?? 0) + 1;
+    } else if (inStock === MERGE_COST - 1 && slot >= 0) {
+      stock[key] -= MERGE_COST - 1;
+      load[tank][slot] = next;
+    } else {
+      return `Il faut ${MERGE_COST} exemplaires du même niveau pour fusionner.`;
+    }
+    if (!stock[key]) delete stock[key];
+    this.save();
+    return null;
+  }
+
+  // Monte un exemplaire du stock sur un char.
+  equip(account, tank, key) {
+    const e = parseEq(key), def = TANK_TYPES[tank];
+    if (!e || !def) return 'Équipement inconnu.';
+    const { stock, load } = this.equipOf(account);
+    if (!stock[key]) return 'Cet exemplaire n’est plus en stock.';
+    const mounted = (load[tank] = cleanLoadout(tank, load[tank]));
+    if (mounted.some((k) => parseEq(k).id === e.id)) return 'Cet équipement est déjà monté sur ce char.';
+    if (mounted.length >= EQUIP_SLOTS) return 'Plus d’emplacement libre sur ce char.';
+    const misfit = equipMisfit(e.id, def);
+    if (misfit) return misfit + '.';
+    stock[key]--;
+    if (!stock[key]) delete stock[key];
+    mounted.push(key);
+    this.save();
+    return null;
+  }
+
+  // Démonte un exemplaire d'un char : il retourne en stock.
+  unequip(account, tank, key) {
+    const { stock, load } = this.equipOf(account);
+    const i = load[tank]?.indexOf(key) ?? -1;
+    if (i < 0) return 'Cet équipement n’est pas monté.';
+    load[tank].splice(i, 1);
+    stock[key] = (stock[key] ?? 0) + 1;
     this.save();
     return null;
   }

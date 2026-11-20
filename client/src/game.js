@@ -12,6 +12,7 @@ import { TICK_MS, SNAPSHOT_INTERVAL, UNIT_TYPES, DEFAULT_TANK } from '/shared/co
 import { DEFAULT_MAP, withBroken } from '/shared/map.js';
 import { mapFor } from '/shared/campaign.js';
 import { stepTank, angleDiff, lerp, lerpAngle, clamp } from '/shared/tank.js';
+import { eqDef } from '/shared/equipment.js';
 
 const SNAP_MS = TICK_MS * SNAPSHOT_INTERVAL;
 const TELEPORT_DIST = 6; // au-delà, on ne lisse pas (réapparition)
@@ -71,8 +72,9 @@ export class Game {
   }
 
   // caractéristiques de mon char (pour la prédiction)
+  // (avec les équipements montés pour la manche : le serveur les annonce dans l'état du salon)
   get def() {
-    return UNIT_TYPES[this.myType] ?? UNIT_TYPES[DEFAULT_TANK];
+    return eqDef(this.myType, this.me?.eq) ?? UNIT_TYPES[this.myType] ?? UNIT_TYPES[DEFAULT_TANK];
   }
 
   onState(msg) {

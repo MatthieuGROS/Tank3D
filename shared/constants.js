@@ -218,7 +218,7 @@ export function hitFace(yaw, fromDx, fromDz) {
 }
 
 export function faceCoef(def, yaw, fromDx, fromDz) {
-  const row = def.armor && FACE_DAMAGE[def.armor];
+  const row = def.face ?? (def.armor && FACE_DAMAGE[def.armor]); // `face` : coefficients modifiés par un équipement (shared/equipment.js)
   return row ? row[hitFace(yaw, fromDx, fromDz)] : 1;
 }
 

@@ -249,13 +249,14 @@
 
       <aside class="panel side sheet" id="sheet">
         <div class="tabs" id="sheet-tabs">
-          <button type="button" data-tab="specs" class="on">Fiche technique</button>
+          <button type="button" data-tab="specs" class="on">Fiche</button>
+          <button type="button" data-tab="equip">Équipement <small id="equip-count"></small></button>
           <button type="button" data-tab="skins">Peintures <small id="skin-count"></small></button>
         </div>
         <div class="side-scroll">
           <div class="tab-body" id="tab-specs">
             <p class="desc" id="sheet-desc"></p>
-            <div class="sub-head">Performances</div>
+            <div class="sub-head" id="sheet-perf">Performances</div>
             <div class="stats" id="sheet-stats"></div>
             <div id="sheet-faces"></div>
             <div id="sheet-acc"></div>
@@ -263,6 +264,19 @@
               <span id="sheet-lock-text"></span>
               <button type="button" class="btn primary" id="sheet-to-store">Voir à la boutique</button>
             </div>
+          </div>
+          <div class="tab-body hidden" id="tab-equip">
+            <p class="desc" id="eq-intro"></p>
+            <p class="eq-note" id="eq-note"></p>
+            <div class="sub-head eq-head"><span>Montés sur ce char</span><small id="eq-slots-count"></small></div>
+            <div class="eq-slots" id="eq-slots"></div>
+            <div class="sub-head eq-head"><span>En stock</span><small id="eq-stock-count"></small></div>
+            <div class="eq-stock" id="eq-stock"></div>
+            <p class="empty hidden" id="eq-empty">Ton stock est vide. Les équipements s’achètent à la boutique, au niveau I.</p>
+            <div class="lockbox hidden" id="eq-lock">
+              <span id="eq-lock-text"></span>
+            </div>
+            <button type="button" class="btn ghost" id="eq-to-store">Boutique d’équipements</button>
           </div>
           <div class="tab-body hidden" id="tab-skins">
             <div class="skin-grid" id="skin-grid"></div>
@@ -390,6 +404,10 @@
             <b><svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M12 2.5a9.5 9.5 0 1 0 0 19 9.5 9.5 0 0 0 0-19Zm0 2a7.5 7.5 0 1 1 0 15 7.5 7.5 0 0 1 0-15Zm-.9 3.2v1.2c-1.5.2-2.4 1.1-2.4 2.3 0 1.4 1.1 2 2.6 2.4 1 .3 1.4.5 1.4.9s-.4.7-1.2.7c-.9 0-1.5-.3-1.9-.9l-1.3.9c.5.8 1.3 1.3 2.4 1.5v1.1h1.6v-1.2c1.6-.2 2.5-1.1 2.5-2.4 0-1.3-1-1.9-2.6-2.3-1-.3-1.4-.5-1.4-.9 0-.4.4-.7 1.1-.7.7 0 1.2.2 1.6.7l1.2-.9c-.5-.6-1.2-1-2.1-1.2V7.7h-1.5Z"/></svg><span id="store-credits"></span></b>
           </div>
         </header>
+        <div class="tabs store-tabs" id="store-tabs">
+          <button type="button" data-s="tanks" class="on">Chars</button>
+          <button type="button" data-s="equip">Équipements <small id="store-equip-count"></small></button>
+        </div>
         <div class="filters" id="store-filters">
           <button type="button" data-f="all" class="on">Tous <small></small></button>
           <button type="button" data-f="buy">À acheter <small></small></button>
@@ -398,6 +416,7 @@
         <div class="side-scroll">
           <div class="store-grid" id="store-grid"></div>
           <p class="empty hidden" id="store-empty">Aucun char dans cette catégorie.</p>
+          <div class="eq-shop hidden" id="eq-shop"></div>
         </div>
         <button type="button" class="btn ghost" id="store-close">‹ Retour au hangar <kbd>Échap</kbd></button>
       </aside>
@@ -418,6 +437,15 @@
           <div class="stats" id="store-stats"></div>
           <div id="store-faces"></div>
           <div id="store-acc"></div>
+          <div class="eq-detail hidden" id="eq-detail">
+            <div class="sub-head">Niveaux</div>
+            <div class="eq-levels" id="eq-levels"></div>
+            <div class="sub-head">Compatibilité</div>
+            <div class="eq-compat" id="eq-compat"></div>
+            <div class="sub-head">Dans ton stock</div>
+            <p class="eq-owned" id="eq-owned"></p>
+            <button type="button" class="btn ghost" id="eq-manage">Gérer mon équipement</button>
+          </div>
         </div>
         <div class="buybox">
           <div class="st-price"><span>Prix</span><div id="store-price"></div></div>

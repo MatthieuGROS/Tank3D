@@ -214,6 +214,27 @@ confirmation). La boutique est ouverte au salon, entre deux parties.
 
 Le dernier char choisi est mémorisé sur le compte.
 
+### Équipements
+
+13 équipements améliorent un char (dégâts, cadence, précision, PV, vitesse…). Ils s'achètent à la **Boutique**, onglet
+*Équipements*, **au niveau I uniquement, 20 000 cr pièce**. Ils se gèrent dans le **Hangar**, onglet *Équipement* :
+
+- **3 emplacements par char**, un même équipement une seule fois par char. Un exemplaire monté quitte le stock (pour
+  le mettre sur un autre char, on le démonte d'abord).
+- **Fusion** : 2 exemplaires identiques du même niveau donnent 1 exemplaire du niveau suivant (jusqu'au niveau III).
+  S'il n'y en a qu'un en stock, celui qui est monté sur le char regardé complète la fusion et garde son emplacement.
+- Les niveaux ne sont pas des multiples fixes : chaque équipement a ses valeurs (`values` dans `shared/equipment.js`),
+  par exemple Culasse +6 / +8 / +10 % de dégâts, Boîte marche arrière +20 / +30 / +40 %.
+- Certains équipements vont mal avec certains chars (Obus aérodynamiques sur le Tonnerre, Servo de tourelle sur le
+  Harpon) : ils sont refusés et grisés.
+- Les équipements sont figés à l'entrée en manche (un changement s'applique à la manche suivante) et **désactivés en
+  course**. Teintes des miniatures : gris (I), or (II), bleu diamant (III).
+
+Techniquement, `eqDef(char, équipements)` (`shared/equipment.js`) fabrique la fiche du char équipé ; serveur et client
+l'utilisent à la place de la fiche d'origine, donc la prédiction reste identique. Pour ajouter un équipement : une entrée
+dans `EQUIPMENT` (valeurs, effet `apply`, éventuelle incompatibilité) et son icône dans `client/src/ui/equipIcons.js`.
+`node tools/equipment-check.js` vérifie les règles sans navigateur.
+
 ### Expérience et grades
 
 | Escarmouche | XP | Campagne | XP |
@@ -254,6 +275,7 @@ tools/
 client/
   index.html       structure de tous les écrans
   style.css        thème (couleurs, boutons, panneaux), HUD en jeu, menus en jeu
+  equipment.js     équipements : données, niveaux, fiche du char équipé (shared/) · equipIcons.js : leurs miniatures (client/src/ui/)
   hub.css          le salon : hangar, opérations, boutique
   src/main.js      relie tout
   src/ui/hub.js    le salon (3 pages) : ne connaît ni le réseau ni la 3D, main.js lui prête ce qu'il faut

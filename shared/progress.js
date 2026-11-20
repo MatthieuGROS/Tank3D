@@ -74,7 +74,7 @@ export function missionXp({ dmg = 0, kills = 0, success = false, stars = 1 }) {
 export const CREDITS = {
   participation: 200, // une fois par partie
   kill: 1000,
-  perDamage: 0.2, // par point de dégâts (les dégâts sont à l'échelle ×10)
+  perDamage: 0.8, // par point de dégâts (les dégâts sont à l'échelle ×10)
   repair: 500, // char détruit (escarmouche)
   starBonus: [0, 5000, 10000, 15000], // campagne : première réussite à ★, ★★, ★★★ (cumulables)
   missionWin: 2000, // campagne : réussite sans nouvelle étoile

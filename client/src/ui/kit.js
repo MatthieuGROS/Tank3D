@@ -133,7 +133,7 @@ export class StatBars {
 
 // Dégâts reçus selon la face touchée (coefficients de FACE_DAMAGE) : vert = protégé, rouge = vulnérable.
 export function faceChips(def) {
-  const row = def.armor && FACE_DAMAGE[def.armor];
+  const row = def.face ?? (def.armor && FACE_DAMAGE[def.armor]);
   if (!row) return null;
   const wrap = el('div', 'faces');
   for (const [key, label] of [['front', 'Avant'], ['side', 'Flancs'], ['rear', 'Arrière']]) {

@@ -9,10 +9,12 @@ import { RANKS, rankInfo, tankOwned, tankPrice, fmtCr } from '/shared/progress.j
 import { MAPS, RACE_MAPS } from '/shared/map.js';
 import { MISSIONS, CHAPTERS, getMission } from '/shared/campaign.js';
 import { SKINS, DEFAULT_SKIN, skinUnlocked, unlockedSkins } from '/shared/skins.js';
+import { EQUIPMENT, EQUIP_IDS, EQUIP_GROUPS, EQUIP_PRICE, EQUIP_SLOTS, EQUIP_MAX_LEVEL, MERGE_COST, eqKey, parseEq, equipEffect, equipMisfit, equipMisfits, cleanLoadout, eqDef } from '/shared/equipment.js';
 import { drawMapPreview } from '../hud.js';
 import { CampaignMap, difficultyRows } from '../campaignMap.js';
 import { $, el, html, fmtInt, ICON, CLASSES, tankClass, classIcon, rankBadge, StatBars, AccuracyPanel, faceChips, reorder } from './kit.js';
 import { loadPortrait } from './portraits.js';
+import { equipTile } from './equipIcons.js';
 
 const TANK_KEYS = Object.keys(TANK_TYPES);
 const MAP_KEYS = Object.keys(MAPS);
@@ -36,6 +38,10 @@ export class Hub {
     this.tankFocus = null; // char regardé (peut être verrouillé : on le voit, sans pouvoir le prendre)
     this.skinFocus = null; // skin verrouillé sélectionné : on lit sa condition, sans l'afficher sur le char
     this.storeFocus = null;
+    this.storeTab = 'tanks'; // boutique : 'tanks' (chars) ou 'equip' (équipements)
+    this.storeEq = EQUIP_IDS[0]; // équipement regardé à la boutique
+    this.eqSig = null; // signature de l'onglet Équipement du hangar (il ne se reconstruit que s'il change)
+    this.eqNote = null; // { text, cls } sous l'onglet Équipement du hangar
     this.filter = 'all';
     this.buying = false; // achat envoyé, réponse attendue
     this.note = null; // { text, cls } sous le bouton d'achat
@@ -54,6 +60,7 @@ export class Hub {
     this.buildCarousel();
     this.buildSkins();
     this.buildStore();
+    this.buildEquipShop();
     this.buildOps();
     this.bind();
     addEventListener('resize', () => (this.dirty = true));
@@ -71,6 +78,20 @@ export class Hub {
   equipped = () => this.game.me?.type ?? DEFAULT_TANK;
   cleared = () => this.game.account?.cleared ?? {};
 
+  // ---- équipements : stock du compte et équipements montés sur chaque char
+  stock = () => this.game.account?.equip?.stock ?? {};
+  loadout = (type) => cleanLoadout(type, this.game.account?.equip?.load?.[type]);
+  // fiche d'un char avec ses équipements montés (jauges du hangar)
+  fitted = (type) => eqDef(type, this.loadout(type));
+  // exemplaires d'un équipement (tous niveaux) : { stock, mounted } ; mounted = montés sur un char quelconque
+  haveOf(id) {
+    let stock = 0, mounted = 0;
+    for (const [k, n] of Object.entries(this.stock())) if (parseEq(k)?.id === id) stock += n;
+    for (const keys of Object.values(this.game.account?.equip?.load ?? {})) mounted += keys.filter((k) => parseEq(k)?.id === id).length;
+    return { stock, mounted };
+  }
+  stockTotal = () => Object.values(this.stock()).reduce((n, v) => n + v, 0);
+
   // Char exposé dans le hangar : celui regardé, sinon celui équipé.
   shownTank() {
     const eq = this.equipped();
@@ -80,7 +101,7 @@ export class Hub {
 
   // Char exposé en 3D : en boutique, celui qu'on examine.
   showcaseType() {
-    return this.page === 'store' ? this.storeFocus ?? this.shownTank() : this.shownTank();
+    return this.page === 'store' && this.storeTab === 'tanks' ? this.storeFocus ?? this.shownTank() : this.shownTank();
   }
 
   // Ordre d'affichage : mes chars, puis ceux à acheter du moins cher au plus cher.
@@ -105,6 +126,13 @@ export class Hub {
 
   openStore(type) {
     if (type) this.storeFocus = type;
+    this.storeTab = 'tanks';
+    this.setPage('store');
+  }
+
+  openEquipShop(id) {
+    if (id) this.storeEq = id;
+    this.storeTab = 'equip';
     this.setPage('store');
   }
 
@@ -247,6 +275,34 @@ export class Hub {
     $('store-grid').replaceChildren(...[...this.shop.values()].map((s) => s.card));
   }
 
+  // Catalogue des équipements : une carte par équipement, rangées par famille.
+  buildEquipShop() {
+    this.eqCards = new Map();
+    const groups = EQUIP_GROUPS.map((name) => {
+      const box = el('div', 'eq-group');
+      box.append(el('div', 'sub-head', name));
+      const grid = el('div', 'store-grid');
+      box.append(grid);
+      return { box, grid };
+    });
+    for (const id of EQUIP_IDS) {
+      const e = EQUIPMENT[id];
+      const card = el('button', 'scard ecard');
+      card.type = 'button';
+      const tag = el('span', 'sc-tag');
+      const have = el('small', 'eq-have');
+      card.append(equipTile(id, 1, 'big'), el('b', 'sc-name', e.name), el('small', 'sc-role', equipEffect(id, 1)), tag, have);
+      card.addEventListener('click', () => {
+        this.storeEq = id;
+        this.note = null;
+        this.render();
+      });
+      groups[e.group].grid.append(card);
+      this.eqCards.set(id, { card, tag, have });
+    }
+    $('eq-shop').replaceChildren(...groups.map((g) => g.box));
+  }
+
   buildOps() {
     this.mapCards = new Map();
     for (const key of MAP_KEYS) {
@@ -356,6 +412,18 @@ export class Hub {
       this.setPage('hangar');
     });
     $('store-action').addEventListener('click', () => this.storeAction());
+    for (const b of $('store-tabs').children) {
+      b.addEventListener('click', () => {
+        this.storeTab = b.dataset.s;
+        this.note = null;
+        this.render();
+      });
+    }
+    $('eq-to-store').addEventListener('click', () => this.openEquipShop());
+    $('eq-manage').addEventListener('click', () => {
+      this.tab = 'equip';
+      this.setPage('hangar');
+    });
     for (const b of $('store-filters').children) {
       b.addEventListener('click', () => {
         this.filter = b.dataset.f;
@@ -383,7 +451,11 @@ export class Hub {
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
       const step = e.key === 'ArrowRight' ? 1 : -1;
       if (this.page === 'hangar') this.browse(step);
-      else if (this.page === 'store') {
+      else if (this.page === 'store' && this.storeTab === 'equip') {
+        this.storeEq = EQUIP_IDS[(EQUIP_IDS.indexOf(this.storeEq) + step + EQUIP_IDS.length) % EQUIP_IDS.length];
+        this.note = null;
+        this.render();
+      } else if (this.page === 'store') {
         const keys = this.storeKeys();
         this.storeFocus = keys[(keys.indexOf(this.storeFocus) + step + keys.length) % keys.length];
         this.note = null;
@@ -438,6 +510,10 @@ export class Hub {
   }
 
   storeAction() {
+    if (this.storeTab === 'equip') {
+      if ((this.game.account?.credits ?? 0) >= EQUIP_PRICE) this.openModal();
+      return;
+    }
     const type = this.storeFocus;
     if (this.owned(type)) {
       this.pickTank(type);
@@ -450,12 +526,13 @@ export class Hub {
   }
 
   openModal() {
-    const type = this.storeFocus, def = TANK_TYPES[type];
-    const credits = this.game.account?.credits ?? 0, price = tankPrice(type);
+    const equip = this.storeTab === 'equip';
+    const type = this.storeFocus, def = equip ? null : TANK_TYPES[type];
+    const credits = this.game.account?.credits ?? 0, price = equip ? EQUIP_PRICE : tankPrice(type);
     this.buying = false;
     $('modal-title').textContent = 'Confirmer l’achat';
-    const img = el('img', 'tc-img ready');
-    loadPortrait(img, type, DEFAULT_SKIN, null);
+    const img = equip ? equipTile(this.storeEq, 1) : el('img', 'tc-img ready');
+    if (!equip) loadPortrait(img, type, DEFAULT_SKIN, null);
     const lines = el('div', 'mo-lines');
     const line = (label, value, cls = '') => {
       const l = el('div', `mo-line ${cls}`);
@@ -465,7 +542,8 @@ export class Hub {
     lines.append(line('Prix', fmtCr(price)), line('Solde actuel', fmtCr(credits)), line('Solde après achat', fmtCr(credits - price), 'after'));
     const head = el('div', 'mo-head');
     head.append(img, el('div', 'mo-name'));
-    head.lastChild.append(el('small', '', def.role), el('b', '', def.name));
+    if (equip) head.lastChild.append(el('small', '', `Équipement · niveau I · ${equipEffect(this.storeEq, 1)}`), el('b', '', EQUIPMENT[this.storeEq].name));
+    else head.lastChild.append(el('small', '', def.role), el('b', '', def.name));
     $('modal-body').replaceChildren(head, lines);
     $('modal-ok').disabled = false;
     $('modal-ok').textContent = 'Acheter';
@@ -483,7 +561,8 @@ export class Hub {
     this.buying = true;
     $('modal-ok').disabled = true;
     $('modal-ok').textContent = 'Achat en cours…';
-    this.net.send({ type: 'buy', tank: this.storeFocus });
+    if (this.storeTab === 'equip') this.net.send({ type: 'buyEquip', id: this.storeEq });
+    else this.net.send({ type: 'buy', tank: this.storeFocus });
   }
 
   onBought(msg) {
@@ -497,6 +576,21 @@ export class Hub {
   onBuyError(msg) {
     this.closeModal();
     this.note = { text: msg.error, cls: 'bad' };
+  }
+
+  // Équipements : réponse du serveur à un achat, une fusion, un montage ou un démontage.
+  onEquipDone(msg) {
+    this.closeModal();
+    const note = { text: msg.text, cls: 'good' };
+    if (msg.op === 'buyEquip') this.note = note;
+    else this.eqNote = note;
+    this.eqSig = null;
+  }
+
+  onEquipError(msg) {
+    this.closeModal();
+    this.note = this.eqNote = { text: msg.error, cls: 'bad' };
+    this.eqSig = null;
   }
 
   // -------------------------------------------------------------- affichage
@@ -609,6 +703,17 @@ export class Hub {
     const locked = !this.owned(type);
     for (const [pre, on] of [['np', this.page === 'hangar'], ['snp', this.page === 'store']]) {
       if (!on) continue;
+      if (pre === 'snp' && this.storeTab === 'equip') {
+        // boutique d'équipements : le bandeau nomme l'équipement regardé (le char exposé reste celui du hangar)
+        const e = EQUIPMENT[this.storeEq];
+        $('snp-class').replaceChildren(el('span', '', `Équipement · ${EQUIP_GROUPS[e.group]}`));
+        $('snp-name').textContent = e.name;
+        $('snp-name').classList.remove('locked');
+        const c = el('span', 'chip lock');
+        c.append(html(ICON.coin), fmtCr(EQUIP_PRICE));
+        $('snp-sub').replaceChildren(el('span', 'chip', equipEffect(this.storeEq, 1)), c);
+        continue;
+      }
       $(`${pre}-class`).replaceChildren(classIcon(cls), el('span', '', `${CLASSES[cls]} · ${def.role}`));
       $(`${pre}-name`).textContent = def.name;
       $(`${pre}-name`).classList.toggle('locked', locked);
@@ -631,10 +736,14 @@ export class Hub {
   renderSheet() {
     for (const b of $('sheet-tabs').children) b.classList.toggle('on', b.dataset.tab === this.tab);
     $('tab-specs').classList.toggle('hidden', this.tab !== 'specs');
+    $('tab-equip').classList.toggle('hidden', this.tab !== 'equip');
     $('tab-skins').classList.toggle('hidden', this.tab !== 'skins');
-    const type = this.shownTank(), def = TANK_TYPES[type], free = this.owned(type);
-    $('sheet-desc').textContent = def.desc;
-    this.specBars.update(def);
+    const type = this.shownTank(), base = TANK_TYPES[type], free = this.owned(type);
+    // les jauges montrent le char avec ses équipements ; le repère indique où il en serait sans
+    const def = free ? this.fitted(type) : base, fitted = def !== base;
+    $('sheet-desc').textContent = base.desc;
+    $('sheet-perf').textContent = fitted ? 'Performances · équipé' : 'Performances';
+    this.specBars.update(def, fitted ? base : null);
     this.specAcc.update(def);
     const faces = faceChips(def);
     $('sheet-faces').replaceChildren(...(faces ? [el('div', 'sub-head', 'Dégâts reçus selon la face touchée'), faces] : []));
@@ -642,6 +751,85 @@ export class Hub {
     $('sheet-lock-text').textContent = free ? '' : `Pas encore dans ton hangar · ${fmtCr(tankPrice(type))}`;
     $('sheet-to-store').disabled = this.running;
     this.renderSkins(type);
+    this.renderEquip(type, free);
+  }
+
+  // ---- onglet Équipement du hangar : emplacements du char et stock du compte
+  renderEquip(type, owned) {
+    const keys = owned ? this.loadout(type) : [];
+    $('equip-count').textContent = `${keys.length}/${EQUIP_SLOTS}`;
+    if (this.tab !== 'equip') return;
+    const stock = this.stock();
+    const sig = JSON.stringify([type, owned, keys, stock, this.race, this.running, this.eqNote]);
+    if (sig === this.eqSig) return; // rien n'a changé : on garde les boutons (un clic ne se perd pas dans une reconstruction)
+    this.eqSig = sig;
+    const def = TANK_TYPES[type];
+    $('eq-intro').textContent = `Monte jusqu’à ${EQUIP_SLOTS} équipements différents sur le ${def.name}. Un exemplaire monté quitte le stock ; deux exemplaires identiques du même niveau fusionnent en un niveau supérieur.`;
+    const lock = this.race ? 'Course : les équipements sont désactivés dans ce mode.'
+      : this.running ? 'Partie en cours : les changements prendront effet à la prochaine manche.' : '';
+    $('eq-lock').classList.toggle('hidden', !lock);
+    $('eq-lock-text').textContent = lock;
+    const send = (msg) => this.net.send({ ...msg, tank: type });
+
+    // emplacements
+    $('eq-slots-count').textContent = `${keys.length} / ${EQUIP_SLOTS}`;
+    const slots = [];
+    for (let i = 0; i < EQUIP_SLOTS; i++) {
+      const key = keys[i];
+      const b = el('button', `eq-slot${key ? ' full' : ''}`);
+      b.type = 'button';
+      b.disabled = !owned || !key;
+      if (key) {
+        const { id, level } = parseEq(key);
+        b.title = 'Démonter';
+        b.append(equipTile(id, level), el('b', '', EQUIPMENT[id].name), el('small', '', equipEffect(id, level)));
+        b.addEventListener('click', () => send({ type: 'unequip', key }));
+      } else {
+        const ico = el('div', 'eq-ico empty');
+        ico.append(html('<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"/></svg>'));
+        b.append(ico, el('b', '', 'Libre'), el('small', '', owned ? 'Emplacement vide' : '—'));
+      }
+      slots.push(b);
+    }
+    $('eq-slots').replaceChildren(...slots);
+
+    // stock : un exemplaire par ligne (équipement + niveau), rangé par équipement puis niveau décroissant
+    const entries = Object.entries(stock).filter(([k, n]) => n > 0 && parseEq(k))
+      .sort(([a], [b]) => EQUIP_IDS.indexOf(parseEq(a).id) - EQUIP_IDS.indexOf(parseEq(b).id) || parseEq(b).level - parseEq(a).level);
+    $('eq-stock-count').textContent = `${entries.reduce((n, [, c]) => n + c, 0)} pièce(s)`;
+    $('eq-empty').classList.toggle('hidden', entries.length > 0);
+    const rows = entries.map(([key, count]) => {
+      const { id, level } = parseEq(key);
+      const misfit = equipMisfit(id, def);
+      const mountedSame = keys.find((k) => parseEq(k).id === id);
+      const row = el('div', `eq-row${misfit ? ' misfit' : ''}`);
+      const info = el('div', 'eq-info');
+      info.append(
+        el('b', '', EQUIPMENT[id].name),
+        el('small', 'eq-meta', `Niveau ${'I'.repeat(level)}${count > 1 ? ` · ×${count} en stock` : ''}`),
+        el('small', misfit ? 'bad' : '', misfit ?? equipEffect(id, level)),
+      );
+      const actions = el('div', 'eq-actions');
+      const mount = el('button', 'btn', 'Monter');
+      mount.type = 'button';
+      mount.disabled = !owned || !!misfit || !!mountedSame || keys.length >= EQUIP_SLOTS;
+      mount.title = !owned ? 'Ce char n’est pas dans ton hangar' : misfit ?? (mountedSame ? 'Cet équipement est déjà monté sur ce char' : keys.length >= EQUIP_SLOTS ? 'Plus d’emplacement libre : démonte-en un' : `Monter sur le ${def.name}`);
+      mount.addEventListener('click', () => send({ type: 'equip', key }));
+      actions.append(mount);
+      // fusion : 2 exemplaires du stock, ou 1 du stock + celui monté sur ce char (il garde son emplacement)
+      if (level < EQUIP_MAX_LEVEL && (count >= MERGE_COST || (count === MERGE_COST - 1 && keys.includes(key)))) {
+        const merge = el('button', 'btn primary', `Fusionner → niv. ${'I'.repeat(level + 1)}`);
+        merge.type = 'button';
+        merge.title = count >= MERGE_COST ? `${MERGE_COST} exemplaires du stock` : 'Avec l’exemplaire monté sur ce char';
+        merge.addEventListener('click', () => send({ type: 'mergeEquip', id, level }));
+        actions.append(merge);
+      }
+      row.append(equipTile(id, level), info, actions);
+      return row;
+    });
+    $('eq-stock').replaceChildren(...rows);
+    $('eq-note').textContent = this.eqNote?.text ?? '';
+    $('eq-note').className = `eq-note ${this.eqNote?.cls ?? ''}`;
   }
 
   renderSkins(type) {
@@ -728,6 +916,14 @@ export class Hub {
         const p = el('span', 'price');
         p.append(html(ICON.coin), fmtInt(price));
         c.foot.append(p);
+      }
+      if (open) {
+        // emplacements d'équipement occupés (losanges)
+        const pips = el('span', 'eq-pips');
+        pips.title = 'Équipements montés';
+        const n = this.loadout(type).length;
+        for (let i = 0; i < EQUIP_SLOTS; i++) pips.append(el('i', i < n ? 'on' : ''));
+        c.foot.append(pips);
       }
       nodes.push(c.card);
     }
@@ -893,6 +1089,18 @@ export class Hub {
   renderStore() {
     const credits = this.game.account?.credits ?? 0, equipped = this.equipped();
     $('store-credits').textContent = fmtInt(credits);
+    const equip = this.storeTab === 'equip';
+    for (const b of $('store-tabs').children) b.classList.toggle('on', b.dataset.s === this.storeTab);
+    $('store-equip-count').textContent = this.stockTotal() ? this.stockTotal() : '';
+    // chars ou équipements : on n'affiche que l'un des deux catalogues et sa fiche
+    for (const id of ['store-filters', 'store-grid']) $(id).classList.toggle('hidden', equip);
+    $('eq-shop').classList.toggle('hidden', !equip);
+    $('eq-detail').classList.toggle('hidden', !equip);
+    for (const id of ['store-compare', 'store-stats', 'store-faces', 'store-acc']) $(id).classList.toggle('hidden', equip);
+    if (equip) {
+      this.renderStoreEquip(credits);
+      return;
+    }
     const keys = this.storeKeys();
     if (!keys.includes(this.storeFocus) && keys.length) this.storeFocus = keys[0];
     for (const b of $('store-filters').children) {
@@ -952,6 +1160,57 @@ export class Hub {
       action.disabled = credits < price;
     }
     action.classList.toggle('ready', !open && credits >= price);
+    $('store-note').textContent = this.note?.text ?? '';
+    $('store-note').className = this.note?.cls ?? '';
+  }
+
+  // ---- boutique : catalogue et fiche des équipements (achat au niveau I, prix unique)
+  renderStoreEquip(credits) {
+    const id = this.storeEq, e = EQUIPMENT[id];
+    $('store-empty').classList.add('hidden');
+    $('store-trait').classList.add('hidden');
+    for (const [key, c] of this.eqCards) {
+      const have = this.haveOf(key), total = have.stock + have.mounted;
+      c.card.classList.toggle('on', key === id);
+      c.tag.className = `sc-tag${credits < EQUIP_PRICE ? ' short' : ''}`;
+      c.tag.replaceChildren(html(ICON.coin), fmtInt(EQUIP_PRICE));
+      c.have.className = `eq-have${total ? ' on' : ''}`;
+      c.have.textContent = total ? `Possédé ×${total}` : 'Pas encore possédé';
+    }
+    $('store-class').replaceChildren(el('span', '', `Équipement · ${EQUIP_GROUPS[e.group]}`));
+    $('store-name').textContent = e.name;
+    $('store-desc').textContent = e.desc;
+    $('eq-levels').replaceChildren(...[1, 2, 3].map((lv) => {
+      const row = el('div', 'eq-level');
+      const text = el('div');
+      text.append(el('b', '', equipEffect(id, lv)), el('small', '', lv === 1 ? 'Achat à la boutique' : `Fusion de ${MERGE_COST} équipements niveau ${'I'.repeat(lv - 1)}`));
+      row.append(equipTile(id, lv), text);
+      return row;
+    }));
+    const misfits = equipMisfits(id);
+    $('eq-compat').replaceChildren(...(misfits.length
+      ? misfits.map((m) => {
+        const chip = el('span', 'chip bad', `${TANK_TYPES[m.type].name} · ${m.reason.toLowerCase()}`);
+        return chip;
+      })
+      : [el('span', 'chip ok', 'Compatible avec tous les chars')]));
+    const have = this.haveOf(id), levels = [1, 2, 3].map((lv) => [lv, this.stock()[eqKey(id, lv)] ?? 0]).filter(([, n]) => n > 0);
+    const parts = [...levels.map(([lv, n]) => `${n} × niveau ${'I'.repeat(lv)}`)];
+    if (have.mounted) parts.push(`${have.mounted} monté${have.mounted > 1 ? 's' : ''} sur un char`);
+    $('eq-owned').textContent = parts.length ? parts.join(' · ') : 'Aucun exemplaire.';
+    $('store-price').replaceChildren((() => {
+      const w = el('b');
+      w.append(html(ICON.coin), fmtInt(EQUIP_PRICE));
+      return w;
+    })());
+    $('store-wallet-bar').classList.remove('hidden');
+    $('store-wallet-fill').style.width = `${Math.min(1, credits / EQUIP_PRICE) * 100}%`;
+    $('store-wallet-text').textContent = credits >= EQUIP_PRICE ? `Solde après achat : ${fmtCr(credits - EQUIP_PRICE)}` : `Il te manque ${fmtCr(EQUIP_PRICE - credits)}`;
+    $('store-wallet-text').classList.toggle('short', credits < EQUIP_PRICE);
+    const action = $('store-action');
+    action.textContent = credits >= EQUIP_PRICE ? `Acheter · ${fmtCr(EQUIP_PRICE)}` : 'Crédits insuffisants';
+    action.disabled = credits < EQUIP_PRICE;
+    action.classList.toggle('ready', credits >= EQUIP_PRICE);
     $('store-note').textContent = this.note?.text ?? '';
     $('store-note').className = this.note?.cls ?? '';
   }
