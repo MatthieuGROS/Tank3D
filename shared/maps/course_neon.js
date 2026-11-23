@@ -1,6 +1,6 @@
 // Vertige Néon : un circuit de science-fiction suspendu au-dessus du vide, avec du relief : lacets en montée jusqu'à un
 // sommet à 34 m, saut géant, longue descente, puis réacteur, abîme et fourche. Il n'y a de sol que sous la piste :
-// hors de la piste on tombe, et on réapparaît au dernier point de passage (+3 s). PAS de garde-fous : c'est le principe.
+// hors de la piste on tombe, et on réapparaît au dernier point de passage. PAS de garde-fous : c'est le principe.
 // Le tour (environ 2 070 m) se fait dans le sens des aiguilles d'une montre vue de dessus (z vers le bas).
 //
 // Déroulé d'un tour :

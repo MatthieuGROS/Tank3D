@@ -380,7 +380,7 @@ function renderRaceEnd(isHost) {
     const tank = tr.insertCell();
     tank.textContent = TANK_TYPES[r.type]?.name ?? '';
     tank.className = 'dim';
-    const time = r.time ? fmtRaceTime(r.time) + (r.pen ? ` (+${r.pen / TICK_RATE} s)` : '') : `${r.laps} / ${d.laps} tours`;
+    const time = r.time ? fmtRaceTime(r.time) : `${r.laps} / ${d.laps} tours`;
     for (const v of [time, r.best ? fmtRaceTime(r.best) : '—', r.pushes]) {
       const td = tr.insertCell();
       td.textContent = v;
@@ -810,7 +810,7 @@ function onEvent(ev) {
       if (v && ev.why !== 'void') fx.burst(v.x, v.z, ev.why === 'water' ? 0x4fb4ff : 0xc0c0c0, 1.6); // gerbe à l'endroit de la chute
       fx.burst(ev.x, ev.z, ev.why === 'void' ? 0xff4fd0 : 0x6cc2ff, 0.9);
       if (ev.id === game.myId) {
-        hud.toast(ev.why === 'water' ? 'À l’eau ! Retour au dernier point de passage (+3 s)' : ev.why === 'void' ? 'Dans le vide ! Retour au dernier point de passage (+3 s)' : 'Retour au dernier point de passage (+3 s)', 'red');
+        hud.toast(ev.why === 'water' ? 'À l’eau ! Retour au dernier point de passage' : ev.why === 'void' ? 'Dans le vide ! Retour au dernier point de passage' : 'Retour au dernier point de passage', 'red');
         sfx.beep(false);
       }
       break;
@@ -1450,9 +1450,9 @@ function raceRows() {
   const rc = game.race;
   if (!rc) return [];
   const index = racerIndexes();
-  return rc.pl.map(([id, lap, cp, fin, pen]) => {
+  return rc.pl.map(([id, lap, cp, fin]) => {
     const p = game.roster.get(id);
-    return { id, name: p?.name ?? '?', css: raceColor(index.get(id) ?? 0)[1], lap, cp, fin, pen, me: id === game.myId, bot: !!p?.bot };
+    return { id, name: p?.name ?? '?', css: raceColor(index.get(id) ?? 0)[1], lap, cp, fin, me: id === game.myId, bot: !!p?.bot };
   });
 }
 

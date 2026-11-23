@@ -7,7 +7,7 @@
 //   tapis turbo      petite flèche lumineuse au sol : turbo (×1,5 de vitesse maximale pendant 1,3 s)
 //   tremplin         rampe : on décolle au bout, la hauteur et la distance dépendent de la vitesse
 //   boue             ralentit, d'autant plus que le char est léger
-//   rivière          mortelle : retour au dernier point de passage (+3 s). Un tremplin la franchit, un ponton la contourne
+//   rivière          mortelle : retour au dernier point de passage. Un tremplin la franchit, un ponton la contourne
 //   portes           barrières coulissantes qui s'ouvrent et se ferment à intervalle régulier
 //   barres mobiles   blocs qui traversent la piste
 //   bumpers          plots rebondissants (flipper) : ils renvoient le char

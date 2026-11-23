@@ -42,7 +42,7 @@ export class Race {
       room.enterRound(p, g.x, g.z, g.yaw);
       p.tank.y = heightAt(g.x, g.z, this.map);
       p.race = {
-        cp: 1, lap: 1, lastCp: 0, prevX: g.x, prevZ: g.z, fin: 0, pen: 0, hold: 0, lapStart: 0, lapTimes: [], pushes: 0,
+        cp: 1, lap: 1, lastCp: 0, prevX: g.x, prevZ: g.z, fin: 0, hold: 0, lapStart: 0, lapTimes: [], pushes: 0,
         progressAt: 0, slot: i, falls: 0,
       };
     });
@@ -118,7 +118,7 @@ export class Race {
 
   finish(p) {
     const r = p.race;
-    r.fin = this.clock + r.pen;
+    r.fin = this.clock;
     r.cp = 0;
     this.finished++;
     if (!this.firstFinish) this.firstFinish = this.clock;
@@ -126,7 +126,7 @@ export class Race {
     this.room.stateDirty = true;
   }
 
-  // Retour au dernier point de passage franchi, à l'arrêt, avec une pénalité de temps.
+  // Retour au dernier point de passage franchi, à l'arrêt (la distance perdue suffit comme pénalité).
   respawn(p, why) {
     const r = p.race, t = p.tank, race = this.race;
     if (!r || this.room.phase !== 'playing') return;
@@ -141,7 +141,6 @@ export class Race {
     r.hold = RACE_RULES.respawnFreezeTicks;
     r.progressAt = this.clock;
     r.falls++;
-    if (!r.fin) r.pen += RACE_RULES.respawnPenaltyTicks;
     p.queue = [];
     this.room.events.push({ k: 'rspawn', id: p.id, why, x: +pos.x.toFixed(1), z: +pos.z.toFixed(1) });
   }
@@ -164,19 +163,19 @@ export class Race {
     const room = this.room, order = this.standings();
     const results = order.map((p, i) => ({
       id: p.id, name: p.name, bot: p.bot || undefined, type: p.activeType, rank: i + 1,
-      time: p.race.fin || 0, laps: p.race.lapTimes.length, pen: p.race.pen, best: p.race.lapTimes.length ? Math.min(...p.race.lapTimes) : 0,
+      time: p.race.fin || 0, laps: p.race.lapTimes.length, best: p.race.lapTimes.length ? Math.min(...p.race.lapTimes) : 0,
       pushes: p.race.pushes, falls: p.race.falls,
     }));
     const result = { race: true, name: this.map.name, laps: this.laps, time: this.clock, results };
     room.endRace(result);
   }
 
-  // Résumé envoyé dans chaque instantané : horloge, tours, et un classement [id, tour, prochain point, arrivée, pénalité].
+  // Résumé envoyé dans chaque instantané : horloge, tours, et un classement [id, tour, prochain point, arrivée].
   info() {
     const left = this.firstFinish ? Math.max(0, finishGrace(this.firstFinish) - (this.clock - this.firstFinish)) : 0;
     return {
       c: this.clock, lp: this.laps, n: this.race.cps.length, g: left,
-      pl: this.standings().map((p) => [p.id, p.race.lap, p.race.cp, p.race.fin, p.race.pen]),
+      pl: this.standings().map((p) => [p.id, p.race.lap, p.race.cp, p.race.fin]),
     };
   }
 

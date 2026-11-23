@@ -343,7 +343,7 @@ export class Hud {
     this.el.cpmarkDist.textContent = `${Math.round(m.dist)} m`;
   }
 
-  // Tableau du classement (Tab) : rows = [{ name, css, lap, fin, pen, pushes, me, bot }]
+  // Tableau du classement (Tab) : rows = [{ name, css, lap, fin, pushes, me, bot }]
   setRaceScoreboard(show, rows, laps) {
     this.el.board.classList.toggle('hidden', !show);
     if (!show) return;

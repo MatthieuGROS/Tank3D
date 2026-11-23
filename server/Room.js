@@ -483,7 +483,7 @@ export class Room {
         break;
       }
       case 'respawn':
-        // course : retour au dernier point de passage (touche R), avec pénalité
+        // course : retour au dernier point de passage (touche R)
         if (this.isRace && this.phase === 'playing' && p.inRound && p.race && !p.race.fin && this.allow(p, 'respawnAt', 2500)) this.race.respawn(p, 'manual');
         break;
       case 'mark': {

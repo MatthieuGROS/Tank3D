@@ -15,7 +15,6 @@ export const RACE_RULES = {
   finishGraceTicks: 45 * TICK_RATE, // après le premier arrivé, les autres ont au moins ce temps pour finir (ou 40 % du temps du premier)
   maxTicks: 12 * 60 * TICK_RATE, // durée maximale d'une course
   respawnFreezeTicks: 45, // le char repart au point de contrôle, canon bloqué un instant
-  respawnPenaltyTicks: 3 * TICK_RATE, // pénalité ajoutée au temps après une chute
   boostTicks: 80, // durée d'un turbo (tapis)
   boostSpeed: 1.5, // vitesse maximale pendant le turbo
   boostAccel: 3.5,
